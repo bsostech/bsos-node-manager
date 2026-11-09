@@ -1,0 +1,178 @@
+# Generated from the default rules in backend/internal/alerting, for promtool tests only; Prometheus does not read this file.
+# Regenerate: cd backend && UPDATE_GOLDEN=1 go test ./internal/alerting/ -run TestDefaultRulesGolden
+groups:
+    - name: custom
+      rules:
+        - alert: PlatformDown
+          expr: up{job="bsos-platform"} == 0
+          for: 1m
+          keep_firing_for: 2m
+          labels:
+            scope: net
+            severity: critical
+          annotations:
+            description: Prometheus 抓不到平台的 /metrics。節點指標經平台代理取得,平台不在等於所有節點都抓不到——此時的 NodeOffline 會被抑制,請先排除平台本身。
+            rule_name: '{{ "PlatformDown" }}'
+            summary: 平台服務中斷,全體節點指標抓取停擺
+        - alert: NodeOffline
+          expr: up{job="bsos-nodes", source="host"} == 0 unless on () up{job="bsos-platform"} == 0
+          for: 2m
+          keep_firing_for: 2m
+          labels:
+            scope: net
+            severity: critical
+          annotations:
+            description: Prometheus 抓不到 {{ $labels.node }} 的指標:agent 沒有連上平台,或 agent 已停止。
+            rule_name: '{{ "NodeOffline" }}'
+            summary: 節點 {{ $labels.node }} 連線中斷
+        - alert: BesuMetricsDown
+          expr: up{job="bsos-nodes", source="besu"} == 0 unless on (node) up{job="bsos-nodes", source="host"} == 0 unless on () up{job="bsos-platform"} == 0
+          for: 2m
+          keep_firing_for: 2m
+          labels:
+            scope: ledger
+            severity: critical
+          annotations:
+            description: agent 連得上,但抓不到 Besu 原生 metrics:Besu 沒有在跑,或 metrics-enabled 沒開、metrics 埠與平台記錄的不同。鏈指標此時都不會更新。
+            rule_name: '{{ "BesuMetricsDown" }}'
+            summary: 節點 {{ $labels.node }} Besu metrics 抓不到
+        - alert: ChainSlow
+          expr: min(timestamp(besu_blockchain_chain_head_timestamp{job="bsos-nodes"}) - besu_blockchain_chain_head_timestamp{job="bsos-nodes"}) / on () bsos_chain_block_period_seconds > 5
+          for: 1m
+          keep_firing_for: 2m
+          labels:
+            scope: consensus
+            severity: warning
+          annotations:
+            description: 距最後一塊的時間超過正常出塊時間的設定倍數。常見原因:有驗證者沒在出塊(每次輪到它都要等逾時才換人)、節點負載過高或網路延遲。
+            rule_name: '{{ "ChainSlow" }}'
+            summary: 出塊變慢
+        - alert: ChainSlowSevere
+          expr: min(timestamp(besu_blockchain_chain_head_timestamp{job="bsos-nodes"}) - besu_blockchain_chain_head_timestamp{job="bsos-nodes"}) / on () bsos_chain_block_period_seconds > 20
+          for: 1m
+          keep_firing_for: 2m
+          labels:
+            scope: consensus
+            severity: critical
+          annotations:
+            description: 可能有驗證者掉線,或驗證者之間失去共識。
+            rule_name: '{{ "ChainSlowSevere" }}'
+            summary: 出塊嚴重變慢或停止
+        - alert: ValidatorsMissing
+          expr: (max(bsos_chain_validators_not_producing) > 0) unless on () ((bsos_chain_validators_not_producing > on () bsos_chain_fault_tolerance) and on () bsos_chain_halted == 1)
+          for: 2m
+          keep_firing_for: 2m
+          labels:
+            scope: consensus
+            severity: warning
+          annotations:
+            description: 有驗證者沒在出塊,鏈還在出塊;再少幾位就會停鏈。到「全鏈健康狀態」看是哪幾位。
+            rule_name: '{{ "ValidatorsMissing" }}'
+            summary: 有 {{ $value }} 位驗證者未參與共識
+        - alert: QuorumLost
+          expr: (bsos_chain_validators_not_producing > on () bsos_chain_fault_tolerance) and on () bsos_chain_halted == 1
+          for: 1m
+          keep_firing_for: 2m
+          labels:
+            scope: consensus
+            severity: critical
+          annotations:
+            description: 沒在出塊的驗證者超過容錯數,湊不到出塊門檻,鏈已停止出塊。
+            rule_name: '{{ "QuorumLost" }}'
+            summary: 驗證者不足,停止出塊({{ $value }} 位未參與)
+        - alert: NodePeerCountLow
+          expr: (bsos_node_peer_count < 2) or (bsos_node_peer_count < 3 and on (node) ALERTS{alertname="NodePeerCountLow", alertstate="firing"})
+          for: 5m
+          keep_firing_for: 2m
+          labels:
+            scope: p2p
+            severity: warning
+          annotations:
+            description: 條件:已連線 Peers < 2 觸發、≥ 3 恢復,持續 5 分鐘。P2P 連線太少,有孤立風險。
+            rule_name: '{{ "NodePeerCountLow" }}'
+            summary: 節點 {{ $labels.node }} peer 數過低({{ $value }})
+            value: '{{ $value }}'
+        - alert: NodeCpuHigh
+          expr: (bsos_node_cpu_percent > 90) or (bsos_node_cpu_percent > 85 and on (node) ALERTS{alertname="NodeCpuHigh", alertstate="firing"})
+          for: 5m
+          keep_firing_for: 2m
+          labels:
+            scope: hw
+            severity: warning
+          annotations:
+            description: 條件:CPU > 90% 觸發、≤ 85% 恢復,持續 5 分鐘。
+            rule_name: '{{ "NodeCpuHigh" }}'
+            summary: 節點 {{ $labels.node }} CPU 使用率過高({{ printf "%.1f" $value | reReplaceAll "\\.0$" "" }}%)
+            value: '{{ $value }}'
+        - alert: NodeMemHigh
+          expr: (bsos_node_mem_percent > 90) or (bsos_node_mem_percent > 85 and on (node) ALERTS{alertname="NodeMemHigh", alertstate="firing"})
+          for: 5m
+          keep_firing_for: 2m
+          labels:
+            scope: hw
+            severity: warning
+          annotations:
+            description: 條件:記憶體 > 90% 觸發、≤ 85% 恢復,持續 5 分鐘。
+            rule_name: '{{ "NodeMemHigh" }}'
+            summary: 節點 {{ $labels.node }} 記憶體使用率過高({{ printf "%.1f" $value | reReplaceAll "\\.0$" "" }}%)
+            value: '{{ $value }}'
+        - alert: NodeDiskHigh
+          expr: (bsos_node_disk_percent > 85) or (bsos_node_disk_percent > 80 and on (node) ALERTS{alertname="NodeDiskHigh", alertstate="firing"})
+          for: 10m
+          keep_firing_for: 2m
+          labels:
+            scope: hw
+            severity: warning
+          annotations:
+            description: 條件:磁碟 > 85% 觸發、≤ 80% 恢復,持續 10 分鐘。鏈資料持續成長,建議及早擴容。
+            rule_name: '{{ "NodeDiskHigh" }}'
+            summary: 節點 {{ $labels.node }} 磁碟使用率過高({{ printf "%.1f" $value | reReplaceAll "\\.0$" "" }}%)
+            value: '{{ $value }}'
+        - alert: NodeJvmHeapHigh
+          expr: (bsos_node_jvm_heap_percent > 90) or (bsos_node_jvm_heap_percent > 85 and on (node) ALERTS{alertname="NodeJvmHeapHigh", alertstate="firing"})
+          for: 5m
+          keep_firing_for: 2m
+          labels:
+            scope: hw
+            severity: warning
+          annotations:
+            description: 條件:Besu 記憶體 > 90% 觸發、≤ 85% 恢復,持續 5 分鐘。堆積快滿會頻繁 GC、出塊變慢,最後 OOM;考慮調高 Besu 的 -Xmx。
+            rule_name: '{{ "NodeJvmHeapHigh" }}'
+            summary: 節點 {{ $labels.node }} Besu 記憶體(Java 堆積)用了 {{ printf "%.1f" $value | reReplaceAll "\\.0$" "" }}%
+            value: '{{ $value }}'
+        - alert: NodeTxpoolFull
+          expr: (bsos_node_txpool_usage_percent >= 80) or (bsos_node_txpool_usage_percent >= 70 and on (node) ALERTS{alertname="NodeTxpoolFull", alertstate="firing"})
+          for: 5m
+          keep_firing_for: 2m
+          labels:
+            scope: ledger
+            severity: warning
+          annotations:
+            description: 條件:交易池用量 >= 80% 觸發、< 70% 恢復,持續 5 分鐘。池滿後新交易會被拒;到交易池分頁看是不是有交易卡住(nonce 斷號、gas 太低),或調高 tx-pool-max-size。
+            rule_name: '{{ "NodeTxpoolFull" }}'
+            summary: 節點 {{ $labels.node }} 交易池用了 {{ printf "%.1f" $value | reReplaceAll "\\.0$" "" }}%
+            value: '{{ $value }}'
+        - alert: NodeTxpoolStale
+          expr: (bsos_node_txpool_oldest_seconds >= 60) or (bsos_node_txpool_oldest_seconds >= 30 and on (node) ALERTS{alertname="NodeTxpoolStale", alertstate="firing"})
+          for: 5m
+          keep_firing_for: 2m
+          labels:
+            scope: ledger
+            severity: warning
+          annotations:
+            description: 條件:交易池最舊等待 >= 60 s 觸發、< 30 s 恢復,持續 5 分鐘。常見原因是 nonce 斷號或 gas 太低;到交易池分頁看是哪個帳戶。
+            rule_name: '{{ "NodeTxpoolStale" }}'
+            summary: 節點 {{ $labels.node }} 交易池最舊一筆已等 {{ $value | humanizeDuration | reReplaceAll "([0-9.]+)d" "${1} 天" | reReplaceAll "([0-9.]+)h" "${1} 小時" | reReplaceAll "([0-9.]+)m" "${1} 分" | reReplaceAll "([0-9.]+)s" "${1} 秒" }}
+            value: '{{ $value }}'
+        - alert: NodeBehind
+          expr: bsos_node_blocks_behind >= 5
+          for: 2m
+          keep_firing_for: 2m
+          labels:
+            scope: ledger
+            severity: warning
+          annotations:
+            description: 條件:落後區塊 >= 5,持續 2 分鐘。節點追不上鏈頭:檢查網路、peer 數與主機負載;peer 正常卻一直落後時,重啟 Besu。
+            rule_name: '{{ "NodeBehind" }}'
+            summary: 節點 {{ $labels.node }} 落後鏈頭 {{ $value }} 塊
+            value: '{{ $value }}'

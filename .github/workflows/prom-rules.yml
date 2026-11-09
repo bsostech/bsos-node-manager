@@ -1,0 +1,29 @@
+name: prom-rules
+
+# Prometheus rules: syntax check + unit tests for recording rules / alerts (deploy/platform/docker-compose/rules_test.yml).
+# The chain metrics bsos_node_* are derived from native Besu metrics; a wrong derivation or a dropped node label just makes charts go silently empty.
+# The image version matches the prometheus service in docker-compose.yml.
+
+on:
+  push:
+    branches: [main]
+    paths: ['deploy/platform/docker-compose/rules*.yml', 'deploy/platform/docker-compose/prometheus.yml', 'deploy/platform/docker-compose/docker-compose.yml', '.github/workflows/prom-rules.yml']
+  pull_request:
+    paths: ['deploy/platform/docker-compose/rules*.yml', 'deploy/platform/docker-compose/prometheus.yml', 'deploy/platform/docker-compose/docker-compose.yml', '.github/workflows/prom-rules.yml']
+  workflow_dispatch: {}
+
+# The public repo accepts external PRs: the token gets read-only permissions
+permissions:
+  contents: read
+
+jobs:
+  rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 -- pinned to a SHA, not a mutable tag
+
+      - name: promtool check + test
+        working-directory: deploy/platform/docker-compose
+        run: |
+          docker run --rm -v "$PWD":/w -w /w --entrypoint promtool prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2 check rules rules.yml rules-defaults.gen.yml rules-defaults-en.gen.yml
+          docker run --rm -v "$PWD":/w -w /w --entrypoint promtool prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2 test rules rules_test.yml rules_test_en.yml

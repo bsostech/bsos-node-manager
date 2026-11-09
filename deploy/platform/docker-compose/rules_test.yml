@@ -1,0 +1,370 @@
+# promtool test rules rules_test.yml: the recording rules' conversion of native Besu metrics (CI: .github/workflows/prom-rules.yml).
+# Input series labels follow the shape of real scrapes: node / org / source come from /sd/targets, job / instance from the relabeling in prometheus.yml.
+# What is checked is that the converted bsos_node_* still carry node / org / source, so charts (prom.go filters by node) and alerts can tell which node it is.
+rule_files:
+  - rules.yml
+  - rules-defaults.gen.yml   # default alert rules (the same file the platform generates, see its header)
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'ethereum_blockchain_height{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu"}'
+        values: '100+1x8'           # one block every 15 seconds
+      - series: 'besu_blockchain_chain_head_timestamp{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu"}'
+        values: '1000+15x8'         # timestamp +15 seconds per block
+      - series: 'ethereum_peer_count{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu"}'
+        values: '3x8'
+      - series: 'ethereum_best_known_block_number{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu"}'
+        values: '104+1x8'           # peers are 4 blocks ahead
+      - series: 'ethereum_best_known_block_number{job="bsos-nodes",instance="node-a2",node="node-a2",org="org-A",source="besu"}'
+        values: '40x8'              # lower than its own height (just restarted, has not heard from peers yet) -> must not go negative
+      # Lag computed by the platform from the chain head: for a1 it is smaller than self-reported -> take the self-reported 4; a3 has only the platform's value (like a node with no peers) -> 75
+      - series: 'bsos_node_blocks_behind_head{job="bsos-platform",instance="server:8080",node="node-a1",org="org-A"}'
+        values: '2x8'
+      - series: 'bsos_node_blocks_behind_head{job="bsos-platform",instance="server:8080",node="node-a3",org="org-A"}'
+        values: '75x8'
+      - series: 'besu_transaction_pool_number_of_transactions{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu",layer="prioritized"}'
+        values: '2x8'
+      - series: 'besu_transaction_pool_number_of_transactions{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu",layer="ready"}'
+        values: '3x8'
+      - series: 'jvm_memory_used_bytes{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu",area="heap"}'
+        values: '50000000x8'
+      - series: 'jvm_memory_max_bytes{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu",area="heap"}'
+        values: '200000000x8'
+      - series: 'jvm_memory_used_bytes{job="bsos-nodes",instance="node-a2",node="node-a2",org="org-A",source="besu",area="heap"}'
+        values: '50000000x8'
+      - series: 'jvm_memory_max_bytes{job="bsos-nodes",instance="node-a2",node="node-a2",org="org-A",source="besu",area="heap"}'
+        values: '-1x8'
+      - series: 'besu_blockchain_chain_head_transaction_count_counter_total{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu"}'
+        values: '0+30x8'            # 30 per 15 seconds = 2 tps
+      # Txpool layered (node-a1): added counts only reason="new"; removed excludes moves between layers; rejected counts only layer="txpool"
+      - series: 'besu_transaction_pool_added_total{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu",layer="ready",priority="yes",reason="new",exported_source="local"}'
+        values: '0+15x8'            # 1 per second
+      - series: 'besu_transaction_pool_added_total{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu",layer="sparse",priority="no",reason="new",exported_source="local"}'
+        values: '0+15x8'            # another 1 per second
+      - series: 'besu_transaction_pool_added_total{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu",layer="ready",priority="no",reason="promoted",exported_source="local"}'
+        values: '0+150x8'           # move between layers: not counted
+      - series: 'besu_transaction_pool_removed_total{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu",layer="ready",priority="yes",operation="confirmed",exported_source="local"}'
+        values: '0+60x8'            # Besu records each one twice: actually 2 per second
+      - series: 'besu_transaction_pool_removed_total{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu",layer="sparse",priority="no",operation="dropped",exported_source="remote"}'
+        values: '0+15x8'            # 1 dropped per second (recorded once)
+      - series: 'besu_transaction_pool_removed_total{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu",layer="ready",priority="yes",operation="evicted",exported_source="local"}'
+        values: '0+150x8'           # move between layers: not counted
+      - series: 'besu_transaction_pool_rejected_total{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu",layer="txpool",priority="yes",reason="NONCE_TOO_LOW",exported_source="local"}'
+        values: '0+1x8'             # 1 per 15 seconds = 4 per minute
+      - series: 'besu_transaction_pool_rejected_total{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu",layer="ready",priority="yes",reason="NONCE_TOO_LOW",exported_source="local"}'
+        values: '0+1x8'             # the same one recorded again within a layer: not counted
+      # Txpool sequenced (node-q1): a different set of names, no layer
+      - series: 'besu_transaction_pool_transactions{job="bsos-nodes",instance="node-q1",node="node-q1",org="org-A",source="besu"}'
+        values: '7x8'
+      - series: 'besu_transaction_pool_transactions_added_total{job="bsos-nodes",instance="node-q1",node="node-q1",org="org-A",source="besu",exported_source="local"}'
+        values: '0+45x8'            # 3 per second
+      - series: 'besu_transaction_pool_transactions_removed_total{job="bsos-nodes",instance="node-q1",node="node-q1",org="org-A",source="besu",operation="addedToBlock",exported_source="local"}'
+        values: '0+15x8'
+      - series: 'besu_transaction_pool_transactions_removed_total{job="bsos-nodes",instance="node-q1",node="node-q1",org="org-A",source="besu",operation="dropped",exported_source="local"}'
+        values: '0+15x8'            # both kinds of removal add up to 2 per second
+      - series: 'besu_transaction_pool_rejected_total{job="bsos-nodes",instance="node-q1",node="node-q1",org="org-A",source="besu",layer="txpool",priority="yes",reason="NONCE_TOO_FAR_IN_FUTURE_FOR_SENDER",exported_source="local"}'
+        values: '0+2x8'             # 8 per minute
+      # Another node stuck at the same height: block time must not produce a value (no division by zero)
+      - series: 'ethereum_blockchain_height{job="bsos-nodes",instance="node-a2",node="node-a2",org="org-A",source="besu"}'
+        values: '50x8'
+      - series: 'besu_blockchain_chain_head_timestamp{job="bsos-nodes",instance="node-a2",node="node-a2",org="org-A",source="besu"}'
+        values: '900x8'
+    promql_expr_test:
+      - expr: bsos_node_chain_height{node="node-a1"}
+        eval_time: 2m
+        exp_samples:
+          - labels: 'bsos_node_chain_height{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu"}'
+            value: 108
+      - expr: bsos_node_blocks_behind
+        eval_time: 2m
+        exp_samples:
+          - labels: 'bsos_node_blocks_behind{node="node-a1",org="org-A"}'
+            value: 4
+          - labels: 'bsos_node_blocks_behind{node="node-a2",org="org-A"}'
+            value: 0
+          - labels: 'bsos_node_blocks_behind{node="node-a3",org="org-A"}'
+            value: 75
+      - expr: bsos_node_peer_count
+        eval_time: 2m
+        exp_samples:
+          - labels: 'bsos_node_peer_count{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu"}'
+            value: 3
+      # Summed over the three layers, but one series per node (sum without (layer), not sum)
+      - expr: bsos_node_txpool_pending{node="node-a1"}
+        eval_time: 2m
+        exp_samples:
+          - labels: 'bsos_node_txpool_pending{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu"}'
+            value: 5
+      # Pending transactions on sequenced nodes (previously only the layered names were recognized, so the chart for sequenced nodes was empty)
+      - expr: bsos_node_txpool_pending{node="node-q1"}
+        eval_time: 2m
+        exp_samples:
+          - labels: 'bsos_node_txpool_pending{job="bsos-nodes",instance="node-q1",node="node-q1",org="org-A",source="besu"}'
+            value: 7
+      - expr: round(bsos_node_txpool_added, 0.01)
+        eval_time: 2m
+        exp_samples:
+          - labels: '{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu"}'
+            value: 2
+          - labels: '{job="bsos-nodes",instance="node-q1",node="node-q1",org="org-A",source="besu"}'
+            value: 3
+      - expr: round(bsos_node_txpool_removed, 0.01)
+        eval_time: 2m
+        exp_samples:
+          - labels: '{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu"}'
+            value: 3
+          - labels: '{job="bsos-nodes",instance="node-q1",node="node-q1",org="org-A",source="besu"}'
+            value: 2
+      - expr: round(bsos_node_txpool_rejected, 0.01)
+        eval_time: 2m
+        exp_samples:
+          - labels: '{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu"}'
+            value: 4
+          - labels: '{job="bsos-nodes",instance="node-q1",node="node-q1",org="org-A",source="besu"}'
+            value: 8
+      - expr: round(bsos_node_tps, 0.01)  # rate() has floating-point error
+        eval_time: 2m
+        exp_samples:
+          - labels: '{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu"}'
+            value: 2
+      # Besu heap: node-a1 uses 50 / 200 MB = 25%; node-a2 has no limit (-1) -> no series
+      - expr: bsos_node_jvm_heap_percent
+        eval_time: 2m
+        exp_samples:
+          - labels: 'bsos_node_jvm_heap_percent{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu",area="heap"}'
+            value: 25
+      # node-a1 15 seconds per block; node-a2 no block for a minute -> no series
+      - expr: bsos_node_block_time_seconds
+        eval_time: 2m
+        exp_samples:
+          - labels: 'bsos_node_block_time_seconds{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu"}'
+            value: 15
+
+  # New chain: block 0 (genesis) has timestamp 0, then one block every 15 seconds from block 1. While block 0 is still in the window no block time is produced (it would be over a billion seconds);
+  # it appears only once block 0 slides out of the window, with the real value of 15 seconds per block.
+  - interval: 15s
+    input_series:
+      - series: 'ethereum_blockchain_height{job="bsos-nodes",instance="node-a3",node="node-a3",org="org-A",source="besu"}'
+        values: '0 1+1x10'
+      - series: 'besu_blockchain_chain_head_timestamp{job="bsos-nodes",instance="node-a3",node="node-a3",org="org-A",source="besu"}'
+        values: '0 1700000000+15x10'
+    promql_expr_test:
+      - expr: bsos_node_block_time_seconds
+        eval_time: 45s
+        exp_samples: []
+      - expr: bsos_node_block_time_seconds
+        eval_time: 2m
+        exp_samples:
+          - labels: 'bsos_node_block_time_seconds{job="bsos-nodes",instance="node-a3",node="node-a3",org="org-A",source="besu"}'
+            value: 15
+
+  # agent up but Besu metrics unreachable -> BesuMetricsDown, no NodeOffline; agent down too -> only NodeOffline.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="host"}'
+        values: '1x10'
+      - series: 'up{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu"}'
+        values: '0x10'
+      - series: 'up{job="bsos-nodes",instance="node-a2",node="node-a2",org="org-A",source="host"}'
+        values: '0x10'
+      - series: 'up{job="bsos-nodes",instance="node-a2",node="node-a2",org="org-A",source="besu"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: BesuMetricsDown
+        exp_alerts:
+          - exp_labels: { job: bsos-nodes, instance: node-a1, node: node-a1, org: org-A, source: besu, severity: critical, scope: ledger }
+            exp_annotations:
+              summary: "節點 node-a1 Besu metrics 抓不到"
+              description: "agent 連得上,但抓不到 Besu 原生 metrics:Besu 沒有在跑,或 metrics-enabled 沒開、metrics 埠與平台記錄的不同。鏈指標此時都不會更新。"
+              rule_name: BesuMetricsDown
+      - eval_time: 4m
+        alertname: NodeOffline
+        exp_alerts:
+          - exp_labels: { job: bsos-nodes, instance: node-a2, node: node-a2, org: org-A, source: host, severity: critical, scope: net }
+            exp_annotations:
+              summary: "節點 node-a2 連線中斷"
+              description: "Prometheus 抓不到 node-a2 的指標:agent 沒有連上平台,或 agent 已停止。"
+              rule_name: NodeOffline
+
+  # Dual thresholds + resolve delay (NodeCpuHigh: fires at > 90, resolves at <= 85, for 5m, resolve delay 2m):
+  # 92 sustained -> fires at 5 minutes; dropping to 87 (between the thresholds) keeps it firing; dropping to 84 from minute 10 -> resolves only after another 2 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'bsos_node_cpu_percent{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="host"}'
+        values: '92x6 87.345x3 84x6'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: NodeCpuHigh
+        exp_alerts:
+          - exp_labels: { job: bsos-nodes, instance: node-a1, node: node-a1, org: org-A, source: host, severity: warning, scope: hw }
+            exp_annotations:
+              summary: "節點 node-a1 CPU 使用率過高(87.3%)"
+              description: "條件:CPU > 90% 觸發、≤ 85% 恢復,持續 5 分鐘。"
+              rule_name: NodeCpuHigh
+              value: "87.345"
+      - eval_time: 11m   # condition no longer holds, still within the resolve delay (value stays at 87.345 from when it last held)
+        alertname: NodeCpuHigh
+        exp_alerts:
+          - exp_labels: { job: bsos-nodes, instance: node-a1, node: node-a1, org: org-A, source: host, severity: warning, scope: hw }
+            exp_annotations:
+              summary: "節點 node-a1 CPU 使用率過高(87.3%)"
+              description: "條件:CPU > 90% 觸發、≤ 85% 恢復,持續 5 分鐘。"
+              rule_name: NodeCpuHigh
+              value: "87.345"
+      - eval_time: 13m
+        alertname: NodeCpuHigh
+        exp_alerts: []
+
+  # The oldest pool transaction's wait in seconds is rendered as a Chinese duration in the summary (Besu reports seconds with decimals).
+  - interval: 1m
+    input_series:
+      - series: 'bsos_node_txpool_oldest_seconds{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="host"}'
+        values: '370.272819328x8'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: NodeTxpoolStale
+        exp_alerts:
+          - exp_labels: { job: bsos-nodes, instance: node-a1, node: node-a1, org: org-A, source: host, severity: warning, scope: ledger }
+            exp_annotations:
+              summary: "節點 node-a1 交易池最舊一筆已等 6 分 10 秒"
+              description: "條件:交易池最舊等待 >= 60 s 觸發、< 30 s 恢復,持續 5 分鐘。常見原因是 nonce 斷號或 gas 太低;到交易池分頁看是哪個帳戶。"
+              rule_name: NodeTxpoolStale
+              value: "370.272819328"
+
+  # Integer percentages in the summary drop the .0 (93 -> 93%, not 93.0%)
+  - interval: 1m
+    input_series:
+      - series: 'bsos_node_mem_percent{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="host"}'
+        values: '93x8'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: NodeMemHigh
+        exp_alerts:
+          - exp_labels: { job: bsos-nodes, instance: node-a1, node: node-a1, org: org-A, source: host, severity: warning, scope: hw }
+            exp_annotations:
+              summary: "節點 node-a1 記憶體使用率過高(93%)"
+              description: "條件:記憶體 > 90% 觸發、≤ 85% 恢復,持續 5 分鐘。"
+              rule_name: NodeMemHigh
+              value: "93"
+
+  # Slow block production (normal block time 2 seconds): time since last block = chain head age at scrape time, taken from this org's most up-to-date node.
+  # node-a1 is healthy (its head is only 2 seconds old at every scrape), node-a2 lags (head stuck at 0) -> the newest one is used, no alert.
+  - interval: 15s
+    input_series:
+      - series: 'besu_blockchain_chain_head_timestamp{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu"}'
+        values: '-2+15x20'
+      - series: 'besu_blockchain_chain_head_timestamp{job="bsos-nodes",instance="node-a2",node="node-a2",org="org-A",source="besu"}'
+        values: '0x20'
+      - series: 'bsos_chain_block_period_seconds{job="bsos-platform",instance="server:8080"}'
+        values: '2x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ChainSlow
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: ChainSlowSevere
+        exp_alerts: []
+
+  # Halted chain: head stuck at 0, age = elapsed seconds. Over 5x (10 seconds) for 1 minute -> ChainSlow; over 20x (40 seconds) for 1 minute -> ChainSlowSevere.
+  - interval: 15s
+    input_series:
+      - series: 'besu_blockchain_chain_head_timestamp{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="besu"}'
+        values: '0x20'
+      - series: 'bsos_chain_block_period_seconds{job="bsos-platform",instance="server:8080"}'
+        values: '2x20'
+    alert_rule_test:
+      - eval_time: 1m30s
+        alertname: ChainSlow
+        exp_alerts:
+          - exp_labels: { severity: warning, scope: consensus }
+            exp_annotations:
+              summary: "出塊變慢"
+              description: "距最後一塊的時間超過正常出塊時間的設定倍數。常見原因:有驗證者沒在出塊(每次輪到它都要等逾時才換人)、節點負載過高或網路延遲。"
+              rule_name: ChainSlow
+      - eval_time: 1m30s
+        alertname: ChainSlowSevere
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: ChainSlowSevere
+        exp_alerts:
+          - exp_labels: { severity: critical, scope: consensus }
+            exp_annotations:
+              summary: "出塊嚴重變慢或停止"
+              description: "可能有驗證者掉線,或驗證者之間失去共識。"
+              rule_name: ChainSlowSevere
+
+  # 4 validators (f = 1): 1 not producing -> ValidatorsMissing (for 2m); 2 with the chain halted -> QuorumLost (for 1m), and ValidatorsMissing no longer holds.
+  - interval: 1m
+    input_series:
+      - series: 'bsos_chain_validators_not_producing{job="bsos-platform",instance="server:8080"}'
+        values: '0 1x5 2x5'
+      - series: 'bsos_chain_fault_tolerance{job="bsos-platform",instance="server:8080"}'
+        values: '1x11'
+      - series: 'bsos_chain_halted{job="bsos-platform",instance="server:8080"}'
+        values: '0x5 1x6'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ValidatorsMissing
+        exp_alerts:
+          - exp_labels: { severity: warning, scope: consensus }
+            exp_annotations:
+              summary: "有 1 位驗證者未參與共識"
+              description: "有驗證者沒在出塊,鏈還在出塊;再少幾位就會停鏈。到「全鏈健康狀態」看是哪幾位。"
+              rule_name: ValidatorsMissing
+      - eval_time: 4m
+        alertname: QuorumLost
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: QuorumLost
+        exp_alerts:
+          - exp_labels: { severity: critical, scope: consensus }
+            exp_annotations:
+              summary: "驗證者不足,停止出塊(2 位未參與)"
+              description: "沒在出塊的驗證者超過容錯數,湊不到出塊門檻,鏈已停止出塊。"
+              rule_name: QuorumLost
+
+  # More non-producing validators than the fault tolerance, but the chain still producing -> no QuorumLost; ValidatorsMissing reports it instead.
+  - interval: 1m
+    input_series:
+      - series: 'bsos_chain_validators_not_producing{job="bsos-platform",instance="server:8080"}'
+        values: '2x10'
+      - series: 'bsos_chain_fault_tolerance{job="bsos-platform",instance="server:8080"}'
+        values: '1x10'
+      - series: 'bsos_chain_halted{job="bsos-platform",instance="server:8080"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: QuorumLost
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: ValidatorsMissing
+        exp_alerts:
+          - exp_labels: { severity: warning, scope: consensus }
+            exp_annotations:
+              summary: "有 2 位驗證者未參與共識"
+              description: "有驗證者沒在出塊,鏈還在出塊;再少幾位就會停鏈。到「全鏈健康狀態」看是哪幾位。"
+              rule_name: ValidatorsMissing
+
+  # 24-hour availability (qUp("host") in backend/internal/prom/history.go; the query string is copied verbatim, change both together).
+  # Platform down for 3 minutes (i5-i16), and the agent reconnects 30 seconds after recovery (a1 returns at i19): the 2-minute lookback after recovery is all 0s from the outage,
+  # which must not make that hour count as disconnected. a2 never comes back after the platform recovers, so it still counts as disconnected.
+  - interval: 15s
+    input_series:
+      - series: 'up{job="bsos-platform",instance="server:8080"}'
+        values: '1x4 0x11 1x8'
+      - series: 'up{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="host"}'
+        values: '1x4 0x13 1x6'
+      - series: 'up{job="bsos-nodes",instance="node-a2",node="node-a2",org="org-A",source="host"}'
+        values: '1x4 0x20'
+    promql_expr_test:
+      - expr: min by (node) (min_over_time((max_over_time(up{job="bsos-nodes",source="host"}[2m]) unless on () min_over_time(up{job="bsos-platform"}[2m]) == 0)[1h:15s]))
+        eval_time: 6m15s
+        exp_samples:
+          - labels: '{node="node-a1"}'
+            value: 1
+          - labels: '{node="node-a2"}'
+            value: 0

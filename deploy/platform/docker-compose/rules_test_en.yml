@@ -1,0 +1,54 @@
+# promtool test rules rules_test_en.yml: the default alert rules rendered in English (CI: .github/workflows/prom-rules.yml).
+# Only the annotations differ between languages, so this covers the ones Prometheus expands from a value: percentages, durations, condition text.
+# rules_test.yml covers the expressions themselves, against the Chinese copy.
+rule_files:
+  - rules.yml
+  - rules-defaults-en.gen.yml   # default alert rules in English (the same file the platform generates, see its header)
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'bsos_node_cpu_percent{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="host"}'
+        values: '92x6 87.345x3 84x6'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: NodeCpuHigh
+        exp_alerts:
+          - exp_labels: { job: bsos-nodes, instance: node-a1, node: node-a1, org: org-A, source: host, severity: warning, scope: hw }
+            exp_annotations:
+              summary: "Node node-a1 CPU usage high (87.3%)"
+              description: "Condition: CPU > 90% (clears at ≤ 85%), for 5 minutes."
+              rule_name: NodeCpuHigh
+              value: "87.345"
+
+  - interval: 1m
+    input_series:
+      - series: 'bsos_node_txpool_oldest_seconds{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="host"}'
+        values: '370.272819328x8'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: NodeTxpoolStale
+        exp_alerts:
+          - exp_labels: { job: bsos-nodes, instance: node-a1, node: node-a1, org: org-A, source: host, severity: warning, scope: ledger }
+            exp_annotations:
+              summary: "Node node-a1 oldest pool transaction has waited 6m 10s"
+              description: "Condition: Oldest pool transaction wait >= 60 s (clears at < 30 s), for 5 minutes. Usually a nonce gap or gas too low; check the Tx pool tab for the account."
+              rule_name: NodeTxpoolStale
+              value: "370.272819328"
+
+  - interval: 1m
+    input_series:
+      - series: 'bsos_node_mem_percent{job="bsos-nodes",instance="node-a1",node="node-a1",org="org-A",source="host"}'
+        values: '93x8'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: NodeMemHigh
+        exp_alerts:
+          - exp_labels: { job: bsos-nodes, instance: node-a1, node: node-a1, org: org-A, source: host, severity: warning, scope: hw }
+            exp_annotations:
+              summary: "Node node-a1 memory usage high (93%)"
+              description: "Condition: Memory > 90% (clears at ≤ 85%), for 5 minutes."
+              rule_name: NodeMemHigh
+              value: "93"

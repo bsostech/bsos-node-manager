@@ -1,0 +1,53 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security issues: do not use this form. See SECURITY.md for how to report them privately.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Platform server
+        - Node agent
+        - Web UI
+        - Deployment (Docker Compose, install script)
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: BSOS Node Manager version or commit
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Besu version and consensus (IBFT 2.0 or QBFT), operating system, browser if it is a UI issue.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant server or agent log lines. Remove tokens, keys and internal addresses first.
+      render: text

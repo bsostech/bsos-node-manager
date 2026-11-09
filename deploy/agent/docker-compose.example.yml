@@ -1,0 +1,32 @@
+# Reference template for running the Node Agent under docker (for manual installs; install.sh --runtime docker writes an equivalent one itself).
+# Before starting, run besu-agent join to obtain certificates into the state directory mounted below (see README.md in this directory).
+services:
+  besu-agent:
+    image: besu-agent:latest          # locally built image (FROM scratch + agent binary)
+    container_name: besu-agent
+    restart: unless-stopped
+
+    # host network: (1) collect host (not container) network metrics (2) reach the Besu RPC on the same machine via localhost
+    network_mode: host
+    # With Docker's SELinux support on, a confined container cannot read the host mounts below; run it unconfined
+    security_opt: ["label=disable"]
+
+    volumes:
+      # Collect host hardware metrics: mount host /proc, /sys and rootfs (read-only), then redirect with the HOST_* vars below
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+      # Certificate material (created by join; must persist, do not let it vanish with the container)
+      - ./agent-state:/var/lib/besu-agent
+
+    environment:
+      # ── Host metric redirection (same approach as node_exporter) ──
+      HOST_PROC: /host/proc           # gopsutil reads cpu/mem/net from the host /proc instead
+      HOST_SYS: /host/sys
+      DISK_PATH: /rootfs              # measure the host root disk, not the container overlay layer
+      # The agent does not need to know where Besu is: the platform forwards through it to 127.0.0.1:<port>, and the port is a column in the platform's nodes table.
+      # ALLOW_PORTS: "8545,9545"      # optional: restrict forwarding to these ports
+      # LOG_SINK: "172.17.0.1:5170"   # optional: address that receives Besu logs (default 127.0.0.1:5170; use the docker0 IP when Besu runs on a bridge network)
+      # ── Service / platform connection ──
+      PLATFORM_ADDR: platform.example:8443
+      AGENT_STATE_DIR: /var/lib/besu-agent

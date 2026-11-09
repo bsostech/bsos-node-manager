@@ -1,0 +1,239 @@
+@import 'tailwindcss';
+
+/* Self-hosted fonts (not fonts.googleapis.com: on-prem / air-gapped data centers must not depend on the internet, and users should not be sent to a third party).
+   They all come from @fontsource npm packages, which the Vite build emits as hashed assets (with unicode-range subsets, so only the glyph sets in use are loaded),
+   so no binaries are committed to the repo. font-display: swap: better to show the fallback first than a FOIT that leaves operators staring at blanks.
+
+   Roles: Latin UI = IBM Plex Sans, data / fingerprints / addresses = IBM Plex Mono (same family, engineering feel, not the default font AI output converges on);
+   Traditional Chinese = Noto Sans TC (the BSOS brand standard Chinese font, consistent across OSes, replacing the old fallback to system fonts).
+   Only the weights actually used are loaded (the type ramp: 400 / 500 / 600). */
+@import '@fontsource/ibm-plex-sans/400.css';
+@import '@fontsource/ibm-plex-sans/500.css';
+@import '@fontsource/ibm-plex-sans/600.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+@import '@fontsource/noto-sans-tc/400.css';
+@import '@fontsource/noto-sans-tc/500.css';
+@import '@fontsource/noto-sans-tc/600.css';
+
+/* Tailwind v4 CSS-first: map the brand CSS variables to utilities (bg-canvas / text-ink / border-hair / bg-accent ...) */
+@theme inline {
+  --color-canvas: var(--bsos-canvas);
+  --color-surface: var(--bsos-surface);
+  --color-elevated: var(--bsos-surface-elevated);
+  --color-hair: var(--bsos-border-hair);
+  --color-strong: var(--bsos-border-strong);
+  --color-ink: var(--bsos-text);
+  --color-ink-2: var(--bsos-text-2);
+  --color-ink-3: var(--bsos-text-3);
+  --color-ink-faint: var(--bsos-text-faint);
+  --color-accent: var(--bsos-accent);
+  --color-accent-hover: var(--bsos-accent-hover);
+  --color-accent-soft: var(--bsos-accent-soft);
+
+  /* Latin uses IBM Plex Sans; CJK falls back per glyph to Noto Sans TC (font-family per-glyph fallback); system fonts are the last resort. */
+  --font-sans: 'IBM Plex Sans', 'Noto Sans TC', 'Helvetica Neue', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'Noto Sans TC', 'SF Mono', ui-monospace, monospace;
+
+  /* Micro font-size tokens, consolidating the scattered text-[0.6~0.7rem] values. */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1.5;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* Site-wide base font size: Tailwind sizes / spacing are in rem, so changing this scales the whole UI proportionally */
+html {
+  font-size: 19px;
+}
+
+body {
+  margin: 0;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  /* Structure is defined by lines, not shadows (brand DNA) */
+}
+
+/* Restrained color transition at the moment the theme switches */
+:root {
+  color-scheme: light;
+}
+[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+/* Reveal: a newly appearing block worth noticing (the overview "Needs attention"). 150ms, 4px offset. */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.rise-in {
+  animation: rise-in 150ms ease-out;
+}
+
+/* Number tick: the new value slides in from below (for constantly changing numbers like block height and TPS). Subject to the reduced-motion rule below. */
+@keyframes num-tick {
+  from {
+    opacity: 0.2;
+    transform: translateY(0.35em);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.num-tick {
+  animation: num-tick 350ms ease-out;
+}
+
+/* ── Micro-interactions (each must be able to say what it tells the user, no infinite loops) ── */
+
+/* Flash the background (once): a status that just got worse, a name just saved, a join command just replaced. Color is --flash (default: the primary tint; for a worsened status, that status's background);
+   to flash again, change the key so the element remounts. If the element has its own background, set --flash-to to it so the fade back does not jump at the end. */
+@keyframes flash-bg {
+  from {
+    background-color: var(--flash, var(--color-accent-soft));
+  }
+  to {
+    background-color: var(--flash-to, transparent);
+  }
+}
+.flash-once {
+  animation: flash-bg 1.5s ease-out;
+}
+/* Highlight for a moment, then fade: marks the row just added when returning from a flow (on 1.5s, fading over 0.7s) */
+@keyframes flash-hold {
+  0%,
+  68% {
+    background-color: var(--flash, var(--color-accent-soft));
+  }
+  100% {
+    background-color: var(--flash-to, transparent);
+  }
+}
+.flash-hold {
+  animation: flash-hold 2.2s ease-out;
+}
+
+/* Pressing "Refresh": the arrow spins once; when data returns, "Updated Ns ago" darkens briefly then fades back (proof the click worked and the data is fresh) */
+@keyframes turn-once {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.turn-once {
+  animation: turn-once 500ms ease-in-out;
+}
+@keyframes ink-flash {
+  from {
+    color: var(--color-ink);
+  }
+}
+.ink-flash {
+  animation: ink-flash 600ms ease-out;
+}
+
+/* Dropdowns, help boxes and popovers opening: 120ms fade-in sliding 2px from the trigger side; no animation on close. Not applied to small hints (Tooltip). */
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--pop-from, -2px));
+  }
+}
+.pop-in {
+  animation: pop-in 120ms ease-out;
+}
+.pop-in[data-side='top'] {
+  --pop-from: 2px;
+}
+.pop-in[data-side='left'],
+.pop-in[data-side='right'] {
+  --pop-from: 0;
+}
+
+/* Dialogs: the overlay (with the window inside) fades in over 150ms, no movement */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+.fade-in {
+  animation: fade-in 150ms ease-out;
+}
+
+/* Expand: content grows from 0 height and fades in (150ms, rotating with the chevron); collapse is instant. Wrap with <Expand> rather than using these two classes directly. */
+@keyframes expand-in {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+  to {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+}
+@keyframes expand-clip {
+  from,
+  to {
+    overflow: hidden;
+  }
+}
+.expand-in {
+  display: grid;
+  animation: expand-in 150ms ease-out;
+}
+.expand-in > * {
+  min-height: 0;
+  animation: expand-clip 150ms;
+}
+
+/* Respect the system "reduce motion" preference (people with vestibular disorders may be made unwell by moving animations).
+   Squash to 0.01ms rather than `animation: none`: visually the same as off, but animationend/transitionend still
+   fire, so code waiting on those events does not hang (the standard industry approach). Motion here is restrained already, so applying it globally is fine:
+   state is always expressed by color / line / text, never carried by animation, so turning it off loses nothing. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Table body: font size no larger than the column names (0.75rem, same as the header), with hierarchy from the header's bold weight and background; per-cell text-xs / monospace stays as is. */
+table:has(> thead > .table-head) > tbody {
+  font-size: 0.75rem;
+}
+
+/* Table header: shared by every <thead><tr> on the site; styles go on th to override each th's own background and text color. Font size is section-caps (not uppercased). */
+@utility table-head {
+  border-bottom: 1px solid var(--color-strong);
+  text-align: left;
+  & > th {
+    background: var(--color-elevated);
+    color: var(--color-ink-2);
+    font-size: 0.75rem;
+    line-height: 1.3;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    padding-block: 0.5rem;
+  }
+}

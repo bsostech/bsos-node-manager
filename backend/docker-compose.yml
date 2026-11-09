@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16.15-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+    container_name: bsos-node-manager-postgres
+    environment:
+      POSTGRES_USER: besu
+      POSTGRES_PASSWORD: besu
+      POSTGRES_DB: besu_manager
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U besu -d besu_manager"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

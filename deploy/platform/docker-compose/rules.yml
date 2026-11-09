@@ -1,0 +1,58 @@
+# Recording rules for the BSOS platform Prometheus: convert native Besu metrics into the bsos_node_* names used by platform charts and alerts.
+# Alert rules do not live here: default and user-added rules are both stored in the platform database and rendered by the platform into rules.d/custom-rules.yml.
+# Data sources: two scrape targets per node (told apart by the source label, see backend/internal/server/sd.go):
+#   source="host": host gauges computed by the agent itself (bsos_node_cpu_percent / mem / disk / net_*, agent/internal/hostmetrics)
+#   source="besu": native Besu metrics, relayed as-is through the agent tunnel; chain-related bsos_node_* are derived by the recording rules below
+# Plus Prometheus's own up{...}.
+groups:
+  # Chain metrics: convert native Besu metrics into the existing bsos_node_* names used by platform charts and alerts. ethereum_* are the EIP-2159 cross-client standard names;
+  # if besu_* names change with a Besu version, only this place changes. Block time and TPS are 1-minute window averages (the agent used to compute them over "the last 10 blocks").
+  - name: bsos-node-chain
+    rules:
+      - record: bsos_node_chain_height
+        expr: ethereum_blockchain_height
+      # Blocks behind: the larger of two sources. (1) The highest block the node learned from its peers minus its own height (both values from the same scrape);
+      # (2) bsos_node_blocks_behind_head, computed by the platform from this org's chain head (nodes are scraped at different times; below the tolerance it records 0).
+      # With (1) alone, a node with no peers sees its own block as the highest, so it is always 0.
+      # The two differ in job / instance / source, so `or` keeps both and max by (node, org) merges them into one; while the platform is down only (1) remains.
+      - record: bsos_node_blocks_behind
+        expr: max by (node, org) (clamp_min(ethereum_best_known_block_number - ethereum_blockchain_height, 0) or bsos_node_blocks_behind_head)
+      - record: bsos_node_peer_count
+        expr: ethereum_peer_count
+      # Transaction pool: Besu has two implementations with different metric names. layered (the public-chain default) carries labels such as layer;
+      # sequenced (the default for the enterprise / private profiles, common on consortium chains) uses another set of names with no layer. A node only has one of the two, so joining them with or does not double count.
+      - record: bsos_node_txpool_pending
+        expr: sum without (layer) (besu_transaction_pool_number_of_transactions) or besu_transaction_pool_transactions
+      # Added: layered counts only reason="new" (the rest are moves between layers or re-adds after a chain reorg, not newly added transactions).
+      - record: bsos_node_txpool_added
+        expr: >-
+          sum without (layer, priority, reason, exported_source) (rate(besu_transaction_pool_added_total{reason="new"}[1m]))
+          or sum without (exported_source) (rate(besu_transaction_pool_transactions_added_total[1m]))
+      # Removed: layered counts only transactions that actually leave the pool (included in a block, replaced, dropped, invalidated); evicted / promoted / demoted etc. are moves between layers.
+      # Besu 26.7.1 layered records each confirmed transaction twice (AbstractTransactionsLayer.confirmed() records it once via processRemove,
+      # then once more itself; in a local test, 45 included transactions were recorded as 90), so confirmed counts only half. Re-verify this when upgrading Besu.
+      # Without a confirmed series (no transaction included yet) the subtracted side does not exist, so fall back to the version without the subtraction.
+      - record: bsos_node_txpool_removed
+        expr: >-
+          (
+            sum without (layer, operation, priority, exported_source) (rate(besu_transaction_pool_removed_total{operation=~"confirmed|replaced|cross_layer_replaced|dropped|invalidated|below_min_score"}[1m]))
+            - sum without (layer, operation, priority, exported_source) (rate(besu_transaction_pool_removed_total{operation="confirmed"}[1m])) / 2
+          )
+          or sum without (layer, operation, priority, exported_source) (rate(besu_transaction_pool_removed_total{operation=~"confirmed|replaced|cross_layer_replaced|dropped|invalidated|below_min_score"}[1m]))
+          or sum without (operation, exported_source) (rate(besu_transaction_pool_transactions_removed_total[1m]))
+      # Rejected (per minute): only layer="txpool". The pool entry point records it once (in both implementations) and layered records it again in each layer, so summing all would double count.
+      # Rejections are rare, so per minute reads better than per second.
+      # Besu's own source label (local/remote) clashes with the scrape target's source="besu", so Prometheus renames it to exported_source; it is summed away here.
+      - record: bsos_node_txpool_rejected
+        expr: sum without (layer, priority, reason, exported_source) (rate(besu_transaction_pool_rejected_total{layer="txpool"}[1m])) * 60
+      - record: bsos_node_tps
+        expr: rate(besu_blockchain_chain_head_transaction_count_counter_total[1m])
+      # No block within 1 minute -> no series (dividing by 0 is meaningless), so the chart shows a gap rather than 0.
+      # Also no series while block 0 (genesis) is still in the window: the genesis timestamp is set when the genesis file is written (often 0 or days before the chain starts),
+      # so the "block 0 -> block 1" interval is not a block time; including it makes a new chain's first point hundreds of millions of seconds and wrecks the whole chart.
+      - record: bsos_node_block_time_seconds
+        expr: delta(besu_blockchain_chain_head_timestamp[1m]) / (delta(ethereum_blockchain_height[1m]) > 0) and min_over_time(ethereum_blockchain_height[1m]) > 0
+      # Percentage of Besu's own memory budget (Java heap) in use: host mem cannot show the heap filling up (the JVM grabs a big chunk from the host at startup).
+      # No series when the limit is -1 (unset) or 0, so no NaN / negative values.
+      - record: bsos_node_jvm_heap_percent
+        expr: jvm_memory_used_bytes{area="heap"} / (jvm_memory_max_bytes{area="heap"} > 0) * 100

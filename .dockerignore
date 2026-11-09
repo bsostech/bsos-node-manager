@@ -1,0 +1,11 @@
+# Repo-root .dockerignore: backend/Dockerfile is a multi-stage build (frontend + Go), so its
+# context points back to the repo root to reach both backend/ and frontend/ sources (see deploy/platform/docker-compose/docker-compose.yml).
+.git
+.claude
+**/node_modules
+**/dist
+backend/bin
+agent/bin
+**/*.log
+**/.env
+deploy/

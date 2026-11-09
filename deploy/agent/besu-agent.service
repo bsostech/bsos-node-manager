@@ -1,0 +1,29 @@
+# systemd unit for the Node Agent (reference file; the platform's install.sh writes an equivalent one itself).
+# Manual install steps are in README.md in this directory. The agent only needs outbound connections, read access to /proc, and write access to its own cert directory; everything else is locked down.
+
+[Unit]
+Description=BSOS Node Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=besu-agent
+Group=besu-agent
+EnvironmentFile=/etc/besu-agent/agent.env
+WorkingDirectory=/var/lib/besu-agent
+ExecStart=/usr/local/bin/besu-agent
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/besu-agent
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

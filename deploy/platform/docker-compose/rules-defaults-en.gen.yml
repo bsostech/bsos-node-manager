@@ -1,0 +1,178 @@
+# Generated from the default rules in backend/internal/alerting, for promtool tests only; Prometheus does not read this file.
+# Regenerate: cd backend && UPDATE_GOLDEN=1 go test ./internal/alerting/ -run TestDefaultRulesGolden
+groups:
+    - name: custom
+      rules:
+        - alert: PlatformDown
+          expr: up{job="bsos-platform"} == 0
+          for: 1m
+          keep_firing_for: 2m
+          labels:
+            scope: net
+            severity: critical
+          annotations:
+            description: Prometheus cannot scrape the platform's /metrics. Node metrics are collected through the platform, so while it is down no node can be scraped and NodeOffline is suppressed. Fix the platform first.
+            rule_name: '{{ "PlatformDown" }}'
+            summary: Platform down, no node metrics are being collected
+        - alert: NodeOffline
+          expr: up{job="bsos-nodes", source="host"} == 0 unless on () up{job="bsos-platform"} == 0
+          for: 2m
+          keep_firing_for: 2m
+          labels:
+            scope: net
+            severity: critical
+          annotations:
+            description: 'Prometheus cannot scrape metrics from {{ $labels.node }}: the agent is not connected to the platform, or it has stopped.'
+            rule_name: '{{ "NodeOffline" }}'
+            summary: Node {{ $labels.node }} disconnected
+        - alert: BesuMetricsDown
+          expr: up{job="bsos-nodes", source="besu"} == 0 unless on (node) up{job="bsos-nodes", source="host"} == 0 unless on () up{job="bsos-platform"} == 0
+          for: 2m
+          keep_firing_for: 2m
+          labels:
+            scope: ledger
+            severity: critical
+          annotations:
+            description: 'The agent is reachable but Besu''s own metrics cannot be scraped: Besu is not running, metrics-enabled is off, or the metrics port differs from the one the platform has on record. Chain metrics stop updating meanwhile.'
+            rule_name: '{{ "BesuMetricsDown" }}'
+            summary: Node {{ $labels.node }} Besu metrics unavailable
+        - alert: ChainSlow
+          expr: min(timestamp(besu_blockchain_chain_head_timestamp{job="bsos-nodes"}) - besu_blockchain_chain_head_timestamp{job="bsos-nodes"}) / on () bsos_chain_block_period_seconds > 5
+          for: 1m
+          keep_firing_for: 2m
+          labels:
+            scope: consensus
+            severity: warning
+          annotations:
+            description: 'Time since the last block exceeds the set multiple of the normal block time. Common causes: a validator is not producing (each of its turns waits for the timeout before moving on), high node load, or network latency.'
+            rule_name: '{{ "ChainSlow" }}'
+            summary: Block production slowed
+        - alert: ChainSlowSevere
+          expr: min(timestamp(besu_blockchain_chain_head_timestamp{job="bsos-nodes"}) - besu_blockchain_chain_head_timestamp{job="bsos-nodes"}) / on () bsos_chain_block_period_seconds > 20
+          for: 1m
+          keep_firing_for: 2m
+          labels:
+            scope: consensus
+            severity: critical
+          annotations:
+            description: A validator may have gone offline, or the validators have lost consensus.
+            rule_name: '{{ "ChainSlowSevere" }}'
+            summary: Block production severely slowed or stopped
+        - alert: ValidatorsMissing
+          expr: (max(bsos_chain_validators_not_producing) > 0) unless on () ((bsos_chain_validators_not_producing > on () bsos_chain_fault_tolerance) and on () bsos_chain_halted == 1)
+          for: 2m
+          keep_firing_for: 2m
+          labels:
+            scope: consensus
+            severity: warning
+          annotations:
+            description: Some validators are not producing blocks; the chain still is, but a few more and it stops. See Chain health for which ones.
+            rule_name: '{{ "ValidatorsMissing" }}'
+            summary: '{{ $value }} validator(s) not taking part in consensus'
+        - alert: QuorumLost
+          expr: (bsos_chain_validators_not_producing > on () bsos_chain_fault_tolerance) and on () bsos_chain_halted == 1
+          for: 1m
+          keep_firing_for: 2m
+          labels:
+            scope: consensus
+            severity: critical
+          annotations:
+            description: More validators are not producing than the fault tolerance allows, so the threshold for producing a block cannot be met. The chain has stopped producing blocks.
+            rule_name: '{{ "QuorumLost" }}'
+            summary: Not enough validators, block production stopped ({{ $value }} not taking part)
+        - alert: NodePeerCountLow
+          expr: (bsos_node_peer_count < 2) or (bsos_node_peer_count < 3 and on (node) ALERTS{alertname="NodePeerCountLow", alertstate="firing"})
+          for: 5m
+          keep_firing_for: 2m
+          labels:
+            scope: p2p
+            severity: warning
+          annotations:
+            description: 'Condition: Connected peers < 2 (clears at ≥ 3), for 5 minutes. Too few P2P connections; the node risks being isolated.'
+            rule_name: '{{ "NodePeerCountLow" }}'
+            summary: Node {{ $labels.node }} peer count low ({{ $value }})
+            value: '{{ $value }}'
+        - alert: NodeCpuHigh
+          expr: (bsos_node_cpu_percent > 90) or (bsos_node_cpu_percent > 85 and on (node) ALERTS{alertname="NodeCpuHigh", alertstate="firing"})
+          for: 5m
+          keep_firing_for: 2m
+          labels:
+            scope: hw
+            severity: warning
+          annotations:
+            description: 'Condition: CPU > 90% (clears at ≤ 85%), for 5 minutes.'
+            rule_name: '{{ "NodeCpuHigh" }}'
+            summary: Node {{ $labels.node }} CPU usage high ({{ printf "%.1f" $value | reReplaceAll "\\.0$" "" }}%)
+            value: '{{ $value }}'
+        - alert: NodeMemHigh
+          expr: (bsos_node_mem_percent > 90) or (bsos_node_mem_percent > 85 and on (node) ALERTS{alertname="NodeMemHigh", alertstate="firing"})
+          for: 5m
+          keep_firing_for: 2m
+          labels:
+            scope: hw
+            severity: warning
+          annotations:
+            description: 'Condition: Memory > 90% (clears at ≤ 85%), for 5 minutes.'
+            rule_name: '{{ "NodeMemHigh" }}'
+            summary: Node {{ $labels.node }} memory usage high ({{ printf "%.1f" $value | reReplaceAll "\\.0$" "" }}%)
+            value: '{{ $value }}'
+        - alert: NodeDiskHigh
+          expr: (bsos_node_disk_percent > 85) or (bsos_node_disk_percent > 80 and on (node) ALERTS{alertname="NodeDiskHigh", alertstate="firing"})
+          for: 10m
+          keep_firing_for: 2m
+          labels:
+            scope: hw
+            severity: warning
+          annotations:
+            description: 'Condition: Disk > 85% (clears at ≤ 80%), for 10 minutes. Chain data keeps growing; plan to add disk space early.'
+            rule_name: '{{ "NodeDiskHigh" }}'
+            summary: Node {{ $labels.node }} disk usage high ({{ printf "%.1f" $value | reReplaceAll "\\.0$" "" }}%)
+            value: '{{ $value }}'
+        - alert: NodeJvmHeapHigh
+          expr: (bsos_node_jvm_heap_percent > 90) or (bsos_node_jvm_heap_percent > 85 and on (node) ALERTS{alertname="NodeJvmHeapHigh", alertstate="firing"})
+          for: 5m
+          keep_firing_for: 2m
+          labels:
+            scope: hw
+            severity: warning
+          annotations:
+            description: 'Condition: Besu memory > 90% (clears at ≤ 85%), for 5 minutes. A nearly full heap means frequent GC, slower block production and eventually OOM; consider raising Besu''s -Xmx.'
+            rule_name: '{{ "NodeJvmHeapHigh" }}'
+            summary: Node {{ $labels.node }} Besu memory (Java heap) at {{ printf "%.1f" $value | reReplaceAll "\\.0$" "" }}%
+            value: '{{ $value }}'
+        - alert: NodeTxpoolFull
+          expr: (bsos_node_txpool_usage_percent >= 80) or (bsos_node_txpool_usage_percent >= 70 and on (node) ALERTS{alertname="NodeTxpoolFull", alertstate="firing"})
+          for: 5m
+          keep_firing_for: 2m
+          labels:
+            scope: ledger
+            severity: warning
+          annotations:
+            description: 'Condition: Pool usage >= 80% (clears at < 70%), for 5 minutes. Once the pool is full, new transactions are rejected. Check the Tx pool tab for stuck transactions (nonce gap, gas too low), or raise tx-pool-max-size.'
+            rule_name: '{{ "NodeTxpoolFull" }}'
+            summary: Node {{ $labels.node }} transaction pool at {{ printf "%.1f" $value | reReplaceAll "\\.0$" "" }}%
+            value: '{{ $value }}'
+        - alert: NodeTxpoolStale
+          expr: (bsos_node_txpool_oldest_seconds >= 60) or (bsos_node_txpool_oldest_seconds >= 30 and on (node) ALERTS{alertname="NodeTxpoolStale", alertstate="firing"})
+          for: 5m
+          keep_firing_for: 2m
+          labels:
+            scope: ledger
+            severity: warning
+          annotations:
+            description: 'Condition: Oldest pool transaction wait >= 60 s (clears at < 30 s), for 5 minutes. Usually a nonce gap or gas too low; check the Tx pool tab for the account.'
+            rule_name: '{{ "NodeTxpoolStale" }}'
+            summary: Node {{ $labels.node }} oldest pool transaction has waited {{ $value | humanizeDuration }}
+            value: '{{ $value }}'
+        - alert: NodeBehind
+          expr: bsos_node_blocks_behind >= 5
+          for: 2m
+          keep_firing_for: 2m
+          labels:
+            scope: ledger
+            severity: warning
+          annotations:
+            description: 'Condition: Blocks behind >= 5, for 2 minutes. The node cannot keep up with the chain head: check the network, peer count and host load. If peers look fine and it keeps falling behind, restart Besu.'
+            rule_name: '{{ "NodeBehind" }}'
+            summary: Node {{ $labels.node }} is {{ $value }} blocks behind the chain head
+            value: '{{ $value }}'

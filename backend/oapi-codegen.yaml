@@ -1,0 +1,12 @@
+# oapi-codegen config - generates Go types and the chi server from contract/openapi.yaml (the single source of truth)
+package: api
+generate:
+  models: true
+  chi-server: true
+  strict-server: true
+  # Embed the contract in the binary for request validation (server.ValidateRequests); Enterprise's cross-file references are resolved through the Core spec, so both must enable it
+  embedded-spec: true
+output: internal/api/api.gen.go
+# Do not prune schemas no path references: the agent's /logblocks goes only through the tunnel and is not a platform API, but both sides still need the same types
+output-options:
+  skip-prune: true

@@ -1,0 +1,63 @@
+name: contract-codegen
+
+# The generated files (api.gen.go / types.gen.go / types.ts) are committed to the repo, not produced at build time.
+# So if contract/openapi.yaml changes but one side's codegen is not rerun, that side silently stays on the old version,
+# and it usually still compiles (leftover unused fields do no harm), with no red anywhere.
+#
+# This job reruns codegen for all three sides; any resulting diff fails it = someone changed the contract without regenerating.
+#
+# Note: this only catches "codegen not rerun". If the contract changes but backend behavior does not follow (e.g. the response
+# schema gains an optional field the backend never fills), neither the compiler nor this check catches it; that needs review and a real run.
+
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+  workflow_dispatch: {}
+
+# The public repo accepts external PRs: the token gets read-only permissions
+permissions:
+  contents: read
+
+jobs:
+  codegen-in-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 -- pinned to a SHA, not a mutable tag
+
+      # The version must match the dev machines: oapi-codegen versions differ in enum naming, so version drift produces
+      # lots of spurious diffs unrelated to content, and this check would go red daily and then be ignored.
+      # The tool directive in backend/go.mod pins oapi-codegen; go-version-file pins the toolchain as well.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.23.4
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # npm ci, not npm install: install from the lockfile so the openapi-typescript version does not drift.
+      - run: npm ci
+        working-directory: frontend
+
+      - name: Regenerate code from the contract (backend, agent, frontend)
+        run: |
+          make -C backend generate
+          make -C agent generate
+          npm --prefix frontend run gen:api
+
+      - name: Generated code must match the contract
+        run: |
+          if ! git diff --quiet; then
+            echo "::error::Generated code is out of sync with contract/openapi.yaml. After changing the contract, regenerate all three:"
+            echo "::error::  make -C backend generate && make -C agent generate && npm --prefix frontend run gen:api"
+            echo ""
+            echo "Diff after regenerating (the part that was not committed):"
+            git --no-pager diff --stat
+            git --no-pager diff
+            exit 1
+          fi
+          echo "Generated code matches the contract."

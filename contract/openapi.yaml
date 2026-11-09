@@ -1,0 +1,3732 @@
+openapi: 3.0.3
+
+# ─────────────────────────────────────────────────────────────
+# BSOS node management tool - API contract (single source of truth)
+# Shared by the frontend (MSW mocks + openapi-typescript types) and the backend (Go)
+# ─────────────────────────────────────────────────────────────
+
+info:
+  title: BSOS Node Manager API
+  version: 0.1.0
+  description: >
+    The API the platform frontend talks to (frontend <-> this organization's platform). Covers my nodes, node details, time series and operations.
+    Cross-organization read-only access (access keys / external organizations) is in the Enterprise edition.
+
+servers:
+  - url: /api/v1
+    description: Same origin as the web UI (the frontend's mock mode intercepts it with MSW)
+
+tags:
+  - name: nodes
+    description: Node list, details and operations
+  - name: metrics
+    description: Time series (for charts)
+  - name: join-tokens
+    description: Node enrollment (issuing and viewing join tokens)
+  - name: alerts
+    description: Prometheus/Alertmanager alerts. Writes arrive through the Alertmanager webhook, which is outside this contract
+
+paths:
+  /nodes:
+    get:
+      tags: [nodes]
+      summary: List this organization's nodes
+      operationId: listNodes
+      security: [{ bearerAuth: ["monitor:view"] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [nodes, asOf]
+                properties:
+                  nodes:
+                    type: array
+                    items: { $ref: '#/components/schemas/NodeSummary' }
+                  asOf: { $ref: '#/components/schemas/Timestamp' }
+                  dataAgeSec:
+                    type: number
+                    nullable: true
+                    description: Age in seconds, at response time, of the oldest node data in this list (computed server-side, unaffected by the browser clock). null when no node has been sampled yet
+
+  /nodes/{id}:
+    get:
+      tags: [nodes]
+      summary: Get node details
+      operationId: getNode
+      security: [{ bearerAuth: ["monitor:view"] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NodeDetail' }
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    delete:
+      tags: [nodes]
+      summary: Delete a node (revokes all its valid certificates so the agent disconnects within 5s; removes the node record and settings)
+      description: >
+        Platform-side offboarding. Revokes every unexpired leaf certificate of the node (the deny-list watcher closes an online agent's connection within seconds) and deletes the node record
+        and its entries in custom peer lists, and revokes its unused join tokens. RPC access identities are shared across the organization and are not deleted. The Besu process on the VM is not affected; to remove the agent completely, run sudo /usr/local/sbin/bsos-uninstall on that machine.
+      operationId: deleteNode
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204':
+          description: Deleted (no content)
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /nodes/{id}/cert:
+    get:
+      tags: [nodes]
+      summary: Get node certificate and connection status (top of the node settings page)
+      operationId: getNodeCert
+      security: [{ bearerAuth: ["monitor:view"] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NodeCertStatus' }
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /nodes/{id}/series:
+    get:
+      tags: [metrics]
+      summary: Get time series for one node (charts)
+      operationId: getNodeSeries
+      security: [{ bearerAuth: ["monitor:view"] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/SeriesMetric'
+        - $ref: '#/components/parameters/SeriesRange'
+        - $ref: '#/components/parameters/SeriesFrom'
+        - $ref: '#/components/parameters/SeriesTo'
+        - $ref: '#/components/parameters/SeriesStep'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MetricSeries' }
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: No time series to query - Prometheus is not configured (PROMETHEUS_URL, reason monitoring_not_configured) or cannot be reached (reason monitoring_down)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /nodes/{id}/peers:
+    get:
+      tags: [nodes]
+      summary: List the peers this node is currently connected to (read from the node's own admin_peers; only peers that completed the handshake are listed). monitor:view is enough to see them, including public key, enode and remote address; cross-organization forwarding has no logged-in user and omits those three fields
+      operationId: listNodePeers
+      security: [{ bearerAuth: ["monitor:view"] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NodePeers' }
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /nodes/{id}/txpool:
+    get:
+      tags: [nodes]
+      summary: Snapshot of this node's transaction pool (node RPC is queried live only while the tab is open; the platform stores nothing)
+      description: |
+        Calls txpool_besuStatistics / besuTransactions / besuPendingTransactions and each account's
+        eth_getTransactionCount(latest) through the agent tunnel, groups by account and returns the top 200 accounts by transaction count.
+        With from, only that address is queried (filtered on the node) and the 200 limit does not apply. Transaction bodies (input, raw, value) are not returned.
+        Limited to this organization's nodes; monitor:view is enough. Not audited (the open tab polls every few seconds).
+      operationId: getNodeTxPool
+      security: [{ bearerAuth: ["monitor:view"] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - name: from
+          in: query
+          required: false
+          description: Only query this sender address (0x + 40 hex)
+          schema: { type: string, pattern: '^0x[0-9a-fA-F]{40}$' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NodeTxPool' }
+        '400':
+          description: from is not an address
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: Node not found or not in this organization
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '502':
+          description: Transaction pool unavailable (agent offline, RPC unreachable, or TXPOOL not enabled on the node)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /shared-peers:
+    get:
+      tags: [nodes]
+      summary: Connection state of the shared list, per-node usage, and candidates that can be added to the list
+      description: |
+        Data comes from the admin_peers the platform reads from each node every round; no extra RPC is made.
+        The shared list is what the platform pushes every round to nodes with "Use shared list" turned on: the list the user entered, minus the receiving node itself and this organization's quarantined nodes.
+      operationId: listSharedPeers
+      security: [{ bearerAuth: ["monitor:view"] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SharedPeers' }
+
+  /manual-peers:
+    post:
+      tags: [nodes]
+      summary: Add to the shared list. The platform does not judge who the peer is or whether to connect; that is the user's responsibility (it may be a node of this organization, with the address supplied by the user)
+      operationId: createManualPeer
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ManualPeerCreateRequest' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ManualPeer' }
+        '400':
+          description: Malformed enode, or the list is full
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: The same public key is already in the list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /manual-peers/{pubkey}:
+    delete:
+      tags: [nodes]
+      summary: Remove from the shared list (the next round calls admin_removePeer on nodes using the shared list)
+      operationId: deleteManualPeer
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      parameters:
+        - name: pubkey
+          in: path
+          required: true
+          schema: { type: string, pattern: '^[0-9a-fA-F]{128}$' }
+      responses:
+        '204':
+          description: Removed
+        '404':
+          description: Public key not in the list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /nodes/{id}/custom-peers:
+    get:
+      tags: [nodes]
+      summary: Extra peers for this node, i.e. the use-shared-list switch and peers added to this node directly
+      operationId: getNodeCustomPeers
+      security: [{ bearerAuth: ["monitor:view"] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NodeCustomPeers' }
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    post:
+      tags: [nodes]
+      summary: Add a peer directly to this node (may be a node of this organization but not this node itself; allowed whether or not the switch is on; admin_addPeer runs next round)
+      operationId: createNodeCustomPeer
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ManualPeerCreateRequest' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CustomPeer' }
+        '400':
+          description: Malformed enode, the enode is this node itself, or the list is full
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: The same public key is already among this node's directly added peers, or this node uses the shared list and the key is already in it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /nodes/{id}/custom-peers/{pubkey}:
+    delete:
+      tags: [nodes]
+      summary: Remove from this node's directly added peers (admin_removePeer runs next round)
+      operationId: deleteNodeCustomPeer
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: pubkey, in: path, required: true, schema: { type: string, pattern: '^[0-9a-fA-F]{128}$' } }
+      responses:
+        '204':
+          description: Removed
+        '404':
+          description: Public key not in the list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /nodes/{id}/peer-shared:
+    put:
+      tags: [nodes]
+      summary: >
+        Set whether this node uses the shared list. The setting is saved first, then admin_addPeer / admin_removePeer is pushed to this node once right away; a failed push is not an error,
+        the next background round (within 30 seconds) resends it anyway. Directly added peers are untouched. The push happens even if the value did not change
+      operationId: setNodePeerShared
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PeerSharedRequest' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NodeCustomPeers' }
+        '400':
+          description: Empty body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /peer-names/{address}:
+    put:
+      tags: [nodes]
+      summary: Name a node, keyed by address (the peers page derives the address from the public key and the validators page uses the address directly, so both show the same name)
+      operationId: setPeerName
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string, pattern: '^0x[0-9a-fA-F]{40}$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PeerNameRequest' }
+      responses:
+        '204':
+          description: Set
+        '400':
+          description: Invalid address or name
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: This address belongs to a node of this organization; name those nodes with PUT /nodes/{id}/name instead
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    delete:
+      tags: [nodes]
+      summary: Clear a node's name
+      operationId: deletePeerName
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string, pattern: '^0x[0-9a-fA-F]{40}$' }
+      responses:
+        '204':
+          description: Cleared (also returns 204 when there was no name)
+        '400':
+          description: Invalid address
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /nodes/{id}/alerts:
+    get:
+      tags: [alerts]
+      summary: Get alerts for one node (local alerts table)
+      operationId: getNodeAlerts
+      security: [{ bearerAuth: ["monitor:view"] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertList' }
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /fleet/status:
+    get:
+      tags: [metrics]
+      summary: Nodes whose agent the platform cannot reach (lists only nodes that have been unreachable for at least 10 minutes)
+      description: >
+        Per-node source status, so the "My nodes" status bar / legend can state it once instead of showing red text on every chart.
+        Decided from the collector's own polling of each agent, not from Prometheus. A node that has never connected, or that has been unreachable for less than 10 minutes, is not listed.
+        `since` is when the node stopped answering (kept on the server, so a reload does not reset it).
+      operationId: getFleetStatus
+      security: [{ bearerAuth: ["monitor:view"] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/FleetNodeStatus' }
+
+  /nodes/{id}/logs:
+    get:
+      tags: [nodes]
+      summary: Recent Besu logs of a node (read from the agent's in-memory buffer through the agent tunnel; the platform stores nothing)
+      description: |
+        Besu sends its logs to the agent on the same machine using the log4j2 config the platform provides; the agent keeps only the latest ~2 MB.
+        The frontend polls with the previous `next` as `after` to fetch only new lines. Limited to this organization's nodes; monitor:view is enough.
+      operationId: getNodeLogs
+      security: [{ bearerAuth: ["monitor:view"] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - name: after
+          in: query
+          required: false
+          description: Only return lines with seq greater than this value. When omitted, the latest limit lines are returned (used when the log view is first opened)
+          schema: { type: integer, format: int64, minimum: 0 }
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of lines (1-1000, default 500). With after, if there are more new lines than this, the earliest ones are returned and the frontend continues with next
+          schema: { type: integer, minimum: 1, maximum: 1000 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NodeLogs' }
+        '404':
+          description: Node not found or not in this organization
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '502':
+          description: Agent offline, or the agent failed to return its logs
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /nodes/{id}/log-level:
+    put:
+      tags: [nodes]
+      summary: Change a node's log level (admin_changeLogLevel; takes effect immediately but is not persisted, and a Besu restart reverts to logging in config.toml)
+      operationId: setNodeLogLevel
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NodeLogLevelRequest' }
+      responses:
+        '204':
+          description: Applied by the node
+        '400':
+          description: Invalid level
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: Node not found or not in this organization
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '502':
+          description: Node offline or refused (message carries the reason, e.g. the ADMIN namespace is not enabled)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /nodes/{id}/name:
+    put:
+      tags: [nodes]
+      summary: Set the display name of a node in this organization (non-ASCII such as Chinese allowed; the node id does not change)
+      operationId: setNodeName
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NodeNameRequest' }
+      responses:
+        '204':
+          description: Updated
+        '400':
+          description: Name longer than 64 characters
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: Node not found or not in this organization
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /nodes/{id}/ports:
+    put:
+      tags: [nodes]
+      summary: Change the node's local RPC and metrics ports (the targets the platform forwards to through the agent tunnel)
+      description: |
+        The agent does not know which ports Besu listens on, so every forwarded request carries X-Target: 127.0.0.1:<port>. Both values are set when the join token is created (default 8545 / 9545).
+        If Besu's ports change, update them here, otherwise the platform cannot read node status (RPC) or scrape chain metrics (metrics).
+      operationId: setNodePorts
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NodePortsRequest' }
+      responses:
+        '204':
+          description: Updated
+        '400':
+          description: Port not in 1-65535
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: Node not found or not in this organization
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /rpc-users:
+    get:
+      tags: [nodes]
+      summary: List this organization's RPC access identities (named sets of method permissions, shared across the organization; the platform stores no passwords, you issue a token to use one)
+      description: |
+        The platform has a single signing key and a token works on every node in this organization that has authentication enabled, so users exist once per organization and are not tied to a node.
+        The list does not include token counts or expiry; read `/rpc-users/{id}/events` for issuance history.
+      operationId: listRpcUsers
+      security: [{ bearerAuth: ["monitor:view"] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/RpcUser' }
+    post:
+      tags: [nodes]
+      summary: Create an RPC access identity (stores only the name and method permissions; tokens are issued separately via /token)
+      operationId: createRpcUser
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RpcUserCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RpcUser' }
+        '400':
+          description: Reserved or invalid user name, or a permission string not in the method catalog
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: An RPC access identity with this name already exists
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /rpc-users/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    delete:
+      tags: [nodes]
+      summary: Delete an RPC access identity and its history (no further tokens are issued; nodes still accept already issued tokens until exp)
+      operationId: deleteRpcUser
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /rpc-users/{id}/token:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [nodes]
+      summary: Issue a JWT for this user (RS256 with the platform private key; permissions = the user's current method permissions; exp is required because Besu rejects tokens without exp)
+      description: |
+        The token appears only once, in this response, and the platform does not keep it. JWTs are stateless: once issued, nodes accept it until exp and the platform cannot revoke it.
+        Deleting the user only affects tokens issued afterwards (method permissions never change after creation). Tokens carry no aud, so every node in this organization with authentication enabled accepts them.
+      operationId: issueRpcUserToken
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RpcTokenRequest' }
+      responses:
+        '200':
+          description: Issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RpcTokenIssued' }
+        '400':
+          description: Not exactly one of ttl and expiresAt given, invalid ttl, expiresAt in the past or more than 1 year ahead, or purpose longer than 64 characters
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /rpc-users/{id}/events:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [nodes]
+      summary: Activity history of an RPC access identity (creation, token issuance; newest first)
+      description: |
+        History belongs to the user: it is deleted with the user, and a user recreated later under the same name gets a new id and does not inherit the old history. The token itself is never stored.
+      operationId: listRpcUserEvents
+      security: [{ bearerAuth: ["monitor:view"] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/RpcUserEvent' }
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /platform/rpc-public-key:
+    get:
+      tags: [nodes]
+      summary: Public key the platform uses to sign node RPC tokens (public endpoint; node operators point Besu's --rpc-http-authentication-jwt-public-key-file at it)
+      description: |
+        Makes no assumption about how nodes are deployed. The platform provides only the public key and fingerprint; node operators decide whether to pass the path to Besu via a CLI flag, an environment variable or config.toml.
+        The same content is also available as plain text at `/api/v1/platform/rpc-public-key.pem` (for saving directly with curl -o).
+      operationId: getPlatformRpcPublicKey
+      security: [] # no login required (also listed in auth.isPublic)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RpcPublicKey' }
+
+  /platform/agent-bundle:
+    get:
+      tags: [nodes]
+      summary: Agent installation info (install.sh checksum, offline bundle file name and checksum)
+      description: |
+        Used by the onboarding page to build the install command. Online installs verify install.sh against installShSha256 before running it; the offline bundle is downloaded from
+        `/api/v1/platform/agent-bundle.tar.gz` (contains install.sh, upgrade-agent.sh, the agent for each architecture, and SHA256SUMS).
+        Bundles built from the same agent files are byte-for-byte identical every time, so the sha256 given here is the hash of the downloaded file.
+      operationId: getAgentBundle
+      security: [{ bearerAuth: ["monitor:view"] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentBundleInfo' }
+
+  /rpc-method-catalog:
+    get:
+      tags: [nodes]
+      summary: Besu RPC method catalog (source for the checkbox list and the backend's permission-validation allowlist; follows the Besu version)
+      operationId: getRpcMethodCatalog
+      security: [{ bearerAuth: ["monitor:view"] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RpcMethodCatalog' }
+
+  /join-tokens:
+    get:
+      tags: [join-tokens]
+      summary: List join tokens (secrets excluded)
+      operationId: listJoinTokens
+      security: [{ bearerAuth: ["monitor:view"] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/JoinToken' }
+    post:
+      tags: [join-tokens]
+      summary: Create a join token (single use; the secret appears only once, in this response)
+      description: >
+        A node keeps at most one unused join token. Creating one revokes the same node's other unused tokens (pending, including ones past
+        expiry) in the same transaction, each recorded as superseded by the new token.
+      operationId: createJoinToken
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/JoinTokenCreateRequest' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JoinTokenCreated' }
+        '400':
+          description: Invalid nodeId format
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /join-tokens/{id}/revoke:
+    post:
+      tags: [join-tokens]
+      summary: Revoke a join token (pending or expired tokens can both be revoked; the record is kept)
+      operationId: revokeJoinToken
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Revoked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JoinToken' }
+        '404':
+          description: Token not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: Token already used or revoked (including a join that completed while this request was in flight); cannot be revoked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /chain:
+    get:
+      tags: [nodes]
+      summary: Chain-level info (taken from this organization's healthy node with the highest block height)
+      operationId: getChainInfo
+      security: [{ bearerAuth: ["monitor:view"] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChainInfo' }
+
+  /chain/nodes:
+    get:
+      tags: [nodes]
+      summary: Nodes on the chain (validator set ∪ this organization's nodes ∪ nodes seen in their admin_peers), validators first
+      operationId: listChainNodes
+      security: [{ bearerAuth: ["monitor:view"] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ChainNode' }
+
+  # ── Validator admission votes (read-only on-chain state + voting on our own validator nodes) ──
+  /validators:
+    get:
+      tags: [validators]
+      summary: Current validator set (read-only, aggregated from the consensus state each node reports)
+      operationId: listValidatorSet
+      security: [{ bearerAuth: ["validators:view"] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ValidatorSetEntry' }
+
+  /validator-votes:
+    get:
+      tags: [validators]
+      summary: Changes under vote, i.e. votes written into blocks this epoch (network-wide) plus votes our own nodes have cast that are not yet in a block, grouped by target address and direction. Once a change takes effect it shows in the validator set and the row disappears
+      operationId: listValidatorVotes
+      security: [{ bearerAuth: ["validators:view"] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ValidatorVotes' }
+    post:
+      tags: [validators]
+      summary: Cast a vote on each of our own validator nodes (*_proposeValidatorVote). No record is created and nothing is re-voted in the background; other organizations vote on their own platforms
+      operationId: proposeValidatorVote
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ValidatorVoteRequest' }
+      responses:
+        '200':
+          description: Per-node results (an individual failure does not fail the whole request)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ValidatorVoteResult' }
+        '400':
+          description: Malformed address
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: This organization has no validator nodes, no node reported a consensus type, or the direction matches the current state (adding an address that is already a validator, or removing one that is not)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /validator-votes/history:
+    get:
+      tags: [validators]
+      summary: Finished validator votes, newest first (recorded by the platform from on-chain votes, starting from the epoch in which the platform began watching)
+      operationId: listValidatorVoteHistory
+      security: [{ bearerAuth: ["validators:view"] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ValidatorVoteRecord' }
+
+  /validator-votes/{address}:
+    delete:
+      tags: [validators]
+      summary: Withdraw this organization's vote for this address on each of our own validator nodes
+      description: >
+        A node whose vote is not yet in a block drops it from its pending votes (*_discardValidatorVote).
+        A node whose vote was already written into a block in this epoch, and so is already counted, casts the opposite vote instead (*_proposeValidatorVote with the other direction) to cancel it.
+      operationId: discardValidatorVote
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string, pattern: '^0x[0-9a-fA-F]{40}$' }
+      responses:
+        '200':
+          description: Per-node results
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ValidatorVoteResult' }
+        '400':
+          description: Malformed address
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: This organization has no validator nodes, or no node reported a consensus type
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /alerts:
+    get:
+      tags: [alerts]
+      summary: List this organization's alerts (Prometheus rules -> Alertmanager -> stored via webhook ingestion)
+      operationId: listAlerts
+      security: [{ bearerAuth: ["monitor:view"] }]
+      parameters:
+        - name: status
+          in: query
+          description: Filter by firing/resolved; all when omitted
+          schema: { $ref: '#/components/schemas/AlertStatus' }
+        - name: nodeId
+          in: query
+          description: Only alerts for this node
+          schema: { type: string }
+        - name: alertname
+          in: query
+          description: Only alerts for this rule (AlertRule.alertname)
+          schema: { type: string }
+        - name: since
+          in: query
+          description: Only alerts still firing after this time or resolved after it
+          schema: { $ref: '#/components/schemas/Timestamp' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertList' }
+
+  /alerts/read:
+    post:
+      tags: [alerts]
+      summary: >
+        Mark the current entry of each of these alerts as read by the current user. A firing alert marks its firing entry; a resolved alert marks both its firing and resolved entries.
+        Unknown or malformed ids are ignored
+      operationId: markAlertsRead
+      security: [{ bearerAuth: ["monitor:view"] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AlertReadRequest' }
+      responses:
+        '204':
+          description: Marked
+        '400':
+          description: Empty body
+
+  /alerts/read-all:
+    post:
+      tags: [alerts]
+      summary: Mark all alerts within the retention period as read by the current user (according to each alert's state)
+      operationId: markAllAlertsRead
+      security: [{ bearerAuth: ["monitor:view"] }]
+      responses:
+        '204':
+          description: Marked
+
+  /alert-settings:
+    get:
+      tags: [alerts]
+      summary: Current alert notification settings (the SMTP password is never returned). Without nodes:onboard, webhook urls are empty strings (only the number of webhooks is visible)
+      operationId: getAlertSettings
+      security: [{ bearerAuth: ["monitor:view"] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertSettings' }
+
+  /alert-settings/smtp:
+    put:
+      tags: [alerts]
+      summary: >
+        Configure and enable Email (SMTP) notifications (nodes:onboard). Only SMTP changes; the webhook list is untouched.
+        Notification settings are split into one endpoint per channel so that changing one channel does not require resending another channel's settings.
+        password is required when username is set; without a username (a relay that takes no login) it may be empty and is not stored.
+        "Leave blank to keep the current password" is not supported; the full settings are sent every time so the operator never has to guess which password is stored.
+      operationId: putAlertSettingsSmtp
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SmtpSettings' }
+      responses:
+        '200':
+          description: Saved; returns the full updated notification settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertSettings' }
+        '400':
+          description: Invalid settings (username set without a password / missing required fields)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500':
+          description: Couldn't save on the server side (database, encryption, writing alertmanager.yml or the rules file); reason alert_settings_save_failed with params.detail, nothing was changed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    delete:
+      tags: [alerts]
+      summary: Disable Email (SMTP) notifications and clear the stored settings (nodes:onboard). The webhook list is not affected.
+      operationId: deleteAlertSettingsSmtp
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      responses:
+        '200':
+          description: Disabled; returns the full updated notification settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertSettings' }
+        '500':
+          description: Couldn't save on the server side (database, writing alertmanager.yml or the rules file); reason alert_settings_save_failed with params.detail, nothing was changed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /alert-settings/webhooks:
+    put:
+      tags: [alerts]
+      summary: >
+        Replace the whole custom webhook list (nodes:onboard). Only webhooks change; SMTP settings are untouched.
+        Sending an empty array clears all webhooks.
+      operationId: putAlertSettingsWebhooks
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '#/components/schemas/AlertWebhookUrl' }
+      responses:
+        '200':
+          description: Saved; returns the full updated notification settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertSettings' }
+        '400':
+          description: Invalid settings (empty label / url, or malformed URL)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500':
+          description: Couldn't save on the server side (database, encryption, writing alertmanager.yml or the rules file); reason alert_settings_save_failed with params.detail, nothing was changed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /alert-settings/telegram:
+    put:
+      tags: [alerts]
+      summary: >
+        Configure and enable Telegram notifications (nodes:onboard). Only Telegram changes; other channels are not affected.
+        botToken is required for the same reason as the SMTP password: "leave blank to keep the current token" is not supported.
+      operationId: putAlertSettingsTelegram
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TelegramSettings' }
+      responses:
+        '200':
+          description: Saved; returns the full updated notification settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertSettings' }
+        '400':
+          description: Invalid settings (missing botToken / chatId)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500':
+          description: Couldn't save on the server side (database, encryption, writing alertmanager.yml or the rules file); reason alert_settings_save_failed with params.detail, nothing was changed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    delete:
+      tags: [alerts]
+      summary: Disable Telegram notifications and clear the stored settings (nodes:onboard).
+      operationId: deleteAlertSettingsTelegram
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      responses:
+        '200':
+          description: Disabled; returns the full updated notification settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertSettings' }
+        '500':
+          description: Couldn't save on the server side (database, writing alertmanager.yml or the rules file); reason alert_settings_save_failed with params.detail, nothing was changed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /alert-settings/slack:
+    put:
+      tags: [alerts]
+      summary: >
+        Configure and enable Slack notifications (nodes:onboard). Only Slack changes; other channels are not affected.
+        webhookUrl is required (the URL itself is the credential and GET never returns it); the host must be hooks.slack.com or hooks.slack-gov.com.
+      operationId: putAlertSettingsSlack
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SlackSettings' }
+      responses:
+        '200':
+          description: Saved; returns the full updated notification settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertSettings' }
+        '400':
+          description: Invalid settings (missing webhookUrl, or not an https://hooks.slack.com/ or https://hooks.slack-gov.com/ URL)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500':
+          description: Couldn't save on the server side (database, encryption, writing alertmanager.yml or the rules file); reason alert_settings_save_failed with params.detail, nothing was changed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    delete:
+      tags: [alerts]
+      summary: Disable Slack notifications and clear the stored settings (nodes:onboard).
+      operationId: deleteAlertSettingsSlack
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      responses:
+        '200':
+          description: Disabled; returns the full updated notification settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertSettings' }
+        '500':
+          description: Couldn't save on the server side (database, writing alertmanager.yml or the rules file); reason alert_settings_save_failed with params.detail, nothing was changed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /alert-settings/locale:
+    put:
+      tags: [alerts]
+      summary: >
+        Set the language and time zone of alert notifications (nodes:onboard). Platform-wide: every channel uses them,
+        and the default rules' summaries and descriptions are written in the same language. Saving rewrites alertmanager.yml,
+        and a language change also rewrites the Prometheus rules file; channels are not affected.
+      operationId: putAlertSettingsLocale
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AlertLocale' }
+      responses:
+        '200':
+          description: Saved; returns the full updated notification settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertSettings' }
+        '400':
+          description: Invalid settings (unknown language, or a non-empty time zone that is not an IANA name)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500':
+          description: Couldn't save on the server side (database, encryption, writing alertmanager.yml or the rules file); reason alert_settings_save_failed with params.detail, nothing was changed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /alert-settings/test-smtp:
+    post:
+      tags: [alerts]
+      summary: >
+        Test the SMTP connection (nodes:onboard, same as PUT /alert-settings/smtp). Only does a TCP connection plus credential check
+        and sends no mail, because testing settings should not bother real recipients. It connects with the chosen `security` and picks the
+        AUTH mechanism the way Alertmanager does (the first of the server's advertised mechanisms it knows), so a passing test means
+        Alertmanager can send with the same settings.
+        It uses the current form contents, not the saved settings,
+        so there is no need to click "Save" before testing.
+      operationId: testAlertSettingsSmtp
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SmtpSettings' }
+      responses:
+        '204':
+          description: Connection and authentication both succeeded
+        '400':
+          description: Unreachable, handshake failed, or credentials rejected (message carries the raw error so the operator can tell whether the host, port or credentials are wrong)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /alert-settings/test-webhook:
+    post:
+      tags: [alerts]
+      summary: >
+        Test a webhook connection (nodes:onboard, same as PUT /alert-settings/webhooks). Only does a TCP connection plus (for https) a TLS handshake
+        and sends no HTTP request. Alertmanager actually sends its own webhook JSON schema, not the Slack {text:...}
+        format, and what the remote server does with a payload is beyond our control; stopping at the connection layer is the only way to guarantee no visible action is triggered.
+        It uses the current form contents, so there is no need to click "Save" before testing.
+      operationId: testAlertSettingsWebhook
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AlertWebhookUrl' }
+      responses:
+        '204':
+          description: TCP connection (and TLS handshake for https) succeeded
+        '400':
+          description: Malformed URL, unreachable, or TLS handshake failed (message carries the raw error)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /alert-settings/test-telegram:
+    post:
+      tags: [alerts]
+      summary: >
+        Test the Telegram settings (nodes:onboard). Verifies the bot token, then sends a test message to the chat.
+        Unlike webhooks, which only test the connection, Telegram has a fixed format, and actually sending a message is the only way to confirm the bot has joined the group.
+        It uses the current form contents, so there is no need to save first.
+      operationId: testAlertSettingsTelegram
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TelegramSettings' }
+      responses:
+        '204':
+          description: Test message sent
+        '400':
+          description: Invalid token, chat not found, bot not in the group, or Telegram unreachable (message says which)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /alert-settings/test-slack:
+    post:
+      tags: [alerts]
+      summary: >
+        Test the Slack webhook (nodes:onboard). Sends a test message to the webhook. It uses the current form contents, so there is no need to save first.
+      operationId: testAlertSettingsSlack
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SlackSettings' }
+      responses:
+        '204':
+          description: Test message sent
+        '400':
+          description: Malformed URL, unreachable, or rejected by Slack (message carries Slack's error code)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /alert-rules:
+    get:
+      tags: [alerts]
+      summary: List alert rules (default rules together with user-added rules)
+      operationId: listAlertRules
+      security: [{ bearerAuth: ["monitor:view"] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AlertRule' }
+
+  /alert-rules/{id}:
+    put:
+      tags: [alerts]
+      summary: Update an alert rule (full replacement; nodes:onboard). Which fields can change depends on kind; see AlertRuleUpdateRequest
+      operationId: updateAlertRule
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AlertRuleUpdateRequest' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertRule' }
+        '400':
+          description: Invalid content
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500':
+          description: Prometheus rejected the new configuration (render/reload failed; the platform has rolled back to the last working configuration)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /alert-rules/restore-defaults:
+    post:
+      tags: [alerts]
+      summary: >
+        Restore default rules (nodes:onboard). Default rules are reset to their default values and re-enabled. User-added rules are not affected.
+        Default rules cannot be deleted (user-added rules can be deleted in Enterprise), and the platform recreates any missing default rule on every startup.
+      operationId: restoreDefaultAlertRules
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      responses:
+        '200':
+          description: Restored; returns all rules
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AlertRule' }
+        '500':
+          description: Prometheus rejected the new rules (the platform has rolled back to the last working configuration)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  # ── Identity / permissions (AuthN + RBAC) ──────
+  /auth/config:
+    get:
+      tags: [auth]
+      summary: Login page settings (whether to show the password form and the SSO button)
+      operationId: getAuthConfig
+      security: [] # no login required (also listed in auth.isPublic)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthConfig' }
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Password login (local account, or the LDAP connector when one is set up; sets the session cookie)
+      operationId: login
+      security: [] # no login required (also listed in auth.isPublic)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        '401':
+          description: Wrong credentials, or the user's groups map to no role (login refused)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /me:
+    get:
+      tags: [auth]
+      summary: Current user (the user resolved by SSO + platform roles + organization)
+      operationId: getMe
+      security: [{ bearerAuth: ["logged-in"] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        '401':
+          description: Not logged in
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Log out (clears the session)
+      operationId: logout
+      security: [{ bearerAuth: ["logged-in"] }]
+      responses:
+        '204':
+          description: Logged out
+
+  # ── Organization-level Besu account allowlist (file-based; applies to all nodes in this organization) ──
+  /permissioning:
+    get:
+      tags: [nodes]
+      summary: Current account allowlist and the detection result for each node
+      operationId: getPermissioningPolicy
+      security: [{ bearerAuth: ["monitor:view"] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PermissioningPolicy' }
+    put:
+      tags: [nodes]
+      summary: Set the shared account allowlist (after saving, perm_* RPCs are sent right away to nodes using the shared list and the result is read back and compared)
+      description: |
+        Pushes only to nodes with "Use shared list" turned on, each receiving its own effective list (shared list ∪ addresses added to that node directly); the response's nodes contains only those nodes.
+        The list may be empty (leaving only each node's directly added addresses; a node with none rejects all transactions).
+        The platform sends each node the difference (perm_addAccountsToAllowlist / perm_removeAccountsFromAllowlist)
+        and Besu writes its own permissions file; afterwards perm_getAccountsAllowlist is read back and compared, and each node's result is returned.
+        Whether the allowlist is enabled is decided by the node's startup options (permissions-accounts-config-file-enabled and PERM in rpc-http-api);
+        the platform has no switch for it and only detects it. Nodes without it enabled report disabled.
+      operationId: setPermissioningPolicy
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PermissioningPolicy' }
+      responses:
+        '200':
+          description: Policy saved; per-node apply results
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PermissioningSaveResult' }
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: The given revision is not the current one (someone else saved first)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /nodes/{id}/allowlist:
+    put:
+      tags: [nodes]
+      summary: Set the addresses added directly to this node (on top of the shared list). They are written to the node first and saved only if the read-back matches
+      description: |
+        A revision of 0 means this node had no directly added addresses; afterwards, send the revision shown on screen.
+        When the node uses the shared list, addresses already in the shared list are not stored again; if nothing remains, no list is kept for this node and policyRevision returns 0.
+        perm_* RPCs are sent to this node first and read back. A node without it enabled or unreachable returns 409; a node that refuses, or a read-back that still differs, returns 502. Nothing is saved in any of these cases.
+      operationId: setNodeAllowlist
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PermissioningPolicy' }
+      responses:
+        '200':
+          description: Saved; apply result for this node
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PermissioningSaveResult' }
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: The given revision is not the current one (someone else saved or cleared it first), or this node has no account allowlist enabled or is currently unreachable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '502':
+          description: The node refused the write (reason is that node's reason, e.g. allowlist_persist_failed), or the read-back after writing still differs; nothing was saved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    delete:
+      tags: [nodes]
+      summary: Clear the addresses added directly to this node. Written to the node first and saved only if the read-back matches (the use-shared-list switch is unchanged)
+      operationId: deleteNodeAllowlist
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Cleared; apply result for this node (policyRevision is the shared list's revision)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PermissioningSaveResult' }
+        '404':
+          description: Node not found, or this node has no directly added addresses
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: This node has no account allowlist enabled, or is currently unreachable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '502':
+          description: The node refused the write, or the read-back after writing still differs; nothing was saved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /nodes/{id}/allowlist/shared:
+    put:
+      tags: [nodes]
+      summary: Set whether this node uses the shared list. Written to the node first and saved only if the read-back matches
+      description: |
+        When off, this node gets only its directly added addresses (which may be empty, in which case Besu rejects all transactions), and later saves of the shared list are not pushed to it.
+        When on, directly added addresses that are already in the shared list are dropped (if nothing remains, no list is kept for this node), and addresses later removed from the shared list are removed from this node too.
+        If the value did not change, it is treated as a reapply. policyRevision is the revision of this node's list, or 0 when it has no directly added addresses.
+      operationId: setNodeAllowlistShared
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NodeAllowlistSharedRequest' }
+      responses:
+        '200':
+          description: Saved; apply result for this node
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PermissioningSaveResult' }
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: This node has no account allowlist enabled, is currently unreachable, or another platform process changed its list first (policy_stale)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '502':
+          description: The node refused the write, or the read-back after writing still differs; nothing was saved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /nodes/{id}/allowlist/sync:
+    post:
+      tags: [nodes]
+      summary: Reapply, i.e. push the platform's effective list (shared list ∪ directly added) to this node again, adding what is missing and removing what is extra
+      operationId: syncNodeAllowlist
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Apply result for this node (policyRevision is the shared list's revision)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PermissioningSaveResult' }
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: This node has no account allowlist enabled, or is currently unreachable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '502':
+          description: The node refused the write, or the read-back after writing still differs
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /account-names:
+    get:
+      tags: [nodes]
+      summary: Names of allowlisted transaction addresses (the platform's own address book, never written to nodes), as a map of lowercase address -> name, listing only named addresses
+      operationId: listAccountNames
+      security: [{ bearerAuth: ["monitor:view"] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: { type: string }
+
+  /account-names/{address}:
+    put:
+      tags: [nodes]
+      summary: Name an allowlisted transaction address (saved immediately, independent of applying the list)
+      operationId: setAccountName
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string, pattern: '^0x[0-9a-fA-F]{40}$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PeerNameRequest' }
+      responses:
+        '204':
+          description: Set
+        '400':
+          description: Invalid address or name
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    delete:
+      tags: [nodes]
+      summary: Clear the name of an allowlisted transaction address
+      operationId: deleteAccountName
+      security: [{ bearerAuth: ["nodes:onboard"] }]
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string, pattern: '^0x[0-9a-fA-F]{40}$' }
+      responses:
+        '204':
+          description: Cleared (also returns 204 when there was no name)
+        '400':
+          description: Invalid address
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/password:
+    post:
+      tags: [auth]
+      summary: Change your own password; the UI calls it only for the forced password change on first login
+      operationId: changePassword
+      security: [{ bearerAuth: ["logged-in"] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PasswordChange' }
+      responses:
+        '204':
+          description: Changed (other sessions of this account are logged out as well)
+        '400':
+          description: The new password does not meet the rules or is the same as the current one (message says which one)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401':
+          description: Current password is wrong, or the account is not a local account (SSO accounts have no password here)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/login-events:
+    get:
+      tags: [auth]
+      summary: Login history (one entry per login attempt, newest first; not part of the audit log and also available in the open-source edition; kept for 90 days)
+      description: |
+        Records both password logins (POST /auth/login) and Enterprise OIDC logins. username is null when the account does not exist; what the user typed is not stored.
+        The source IP works as in the audit log: it is the connection address, and X-Forwarded-For is trusted only when the connection comes from a proxy in TRUSTED_PROXY_CIDR.
+        At most 500 entries are returned per request; beyond that truncated = true (narrow the time range).
+      operationId: listLoginEvents
+      security: [{ bearerAuth: ["members:manage"] }]
+      parameters:
+        - { name: since, in: query, required: true, description: 'From this time (inclusive)', schema: { type: string, format: date-time } }
+        - { name: username, in: query, required: false, description: 'Only this account', schema: { type: string } }
+        - { name: result, in: query, required: false, schema: { $ref: '#/components/schemas/LoginResult' } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginEventList' }
+        '400':
+          description: since is missing or malformed, or result is not success / failure
+
+  /users:
+    get:
+      tags: [auth]
+      summary: List local users
+      operationId: listLocalUsers
+      security: [{ bearerAuth: ["members:manage"] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/LocalUser' }
+    post:
+      tags: [auth]
+      summary: Create a local user. The temporary password is always generated by the system. By default it appears once in the response for the admin to hand over; with sendEmail it is mailed to email (see GET /account-mail). A password change is forced on first login
+      operationId: createLocalUser
+      security: [{ bearerAuth: ["members:manage"] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LocalUserCreateRequest' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LocalUserCreated' }
+        '400':
+          description: Account name or email does not meet the rules, or sendEmail without an email
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: Account already exists, or sendEmail but no mail server for password emails was configured at deployment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /users/{username}:
+    patch:
+      tags: [auth]
+      summary: Disable / enable a user (disabling logs out all of the account's sessions). The role is fixed at creation and cannot be changed
+      operationId: updateLocalUser
+      security: [{ bearerAuth: ["members:manage"] }]
+      parameters:
+        - { name: username, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LocalUserUpdateRequest' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LocalUser' }
+        '400':
+          description: Missing content
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: No such local user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: Would leave the organization without an enabled admin, or targets yourself
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    delete:
+      tags: [auth]
+      summary: Delete a local user (all logged-in sessions are logged out; audit records are kept separately)
+      operationId: deleteLocalUser
+      security: [{ bearerAuth: ["members:manage"] }]
+      parameters:
+        - { name: username, in: path, required: true, schema: { type: string } }
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          description: No such local user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: Would leave the organization without an enabled admin, or deletes yourself
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /users/{username}/reset-password:
+    post:
+      tags: [auth]
+      summary: Reset a password. The new password is always generated by the system and delivered the same way as for a new user. After a reset all sessions are logged out, a password change is forced on next login, and the failure count is cleared
+      operationId: resetLocalUserPassword
+      security: [{ bearerAuth: ["members:manage"] }]
+      parameters:
+        - { name: username, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PasswordResetRequest' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PasswordResetResult' }
+        '400':
+          description: sendEmail but this account has no email
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: No such local user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: The account is the caller's own (change your own password with POST /auth/password instead), or sendEmail but no mail server for password emails was configured at deployment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /account-mail:
+    get:
+      tags: [auth]
+      summary: Whether temporary-password emails can be sent (whether ACCOUNT_SMTP_* was set at deployment); returns no settings
+      operationId: getAccountMailStatus
+      security: [{ bearerAuth: ["members:manage"] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountMailStatus' }
+
+components:
+  parameters:
+    SeriesMetric:
+      name: metric
+      in: query
+      required: true
+      schema: { $ref: '#/components/schemas/MetricId' }
+    SeriesRange:
+      name: range
+      in: query
+      description: Relative time range (sliding window counted back from now). A duration string such as 15m / 1h / 6h / 24h / 7d / 3d. Ignored when from+to are given.
+      schema:
+        type: string
+        pattern: '^[0-9]+[mhd]$'
+        default: '1h'
+    SeriesFrom:
+      name: from
+      in: query
+      description: Absolute window start (epoch seconds). Given together with to, it freezes the window (for drag-to-zoom) and overrides range.
+      schema: { type: integer, format: int64 }
+    SeriesTo:
+      name: to
+      in: query
+      description: Absolute window end (epoch seconds).
+      schema: { type: integer, format: int64 }
+    SeriesStep:
+      name: step
+      in: query
+      description: Explicit sampling interval (seconds). Fleet overlay charts use it so multiple nodes share the same time grid. When omitted, the server derives it from the span of range or from/to.
+      schema: { type: integer, format: int64, minimum: 15 }
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        Platform session. Each operation declares the permission it needs as a scope (monitor:view, nodes:onboard, etc.; logged-in means any logged-in user);
+        security: [] means no login is required. Operations that declare no scope are always rejected.
+
+  schemas:
+    # ── Enums ─────────────────────────────────────────────
+    Timestamp:
+      type: string
+      format: date-time
+      description: Time the data was collected (as_of)
+
+    Role:
+      type: string
+      enum: [viewer, operator, admin]
+      description: Platform role
+
+    User:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string, example: u-alice }
+        name: { type: string, example: Alice }
+        account:
+          type: string
+          nullable: true
+          description: Display account name from SSO (the LDAP login name; for OIDC, preferred_username, then email, falling back to id). id is the identifier, which for OIDC is the IdP subject and may not be human-readable. null for local accounts
+          example: alice@org-a.example
+
+    Me:
+      type: object
+      description: Current session (after SSO resolution); the frontend derives available permissions from role
+      required: [user, role, org]
+      properties:
+        user: { $ref: '#/components/schemas/User' }
+        role: { $ref: '#/components/schemas/Role' }
+        org: { type: string, example: org-a }
+        mustChangePassword:
+          type: boolean
+          default: false
+          description: true on a local account's first login; the frontend forces a password change before letting the user in
+        platformAddr:
+          type: string
+          nullable: true
+          description: mTLS address nodes dial into the platform on (PLATFORM_ADDR, host:port). null when unset (or still the default localhost:8443), in which case the frontend falls back to the browser's host name
+          example: platform.org-a:8443
+        publicApiBase:
+          type: string
+          nullable: true
+          description: Address nodes use to download installers and reach the platform over HTTP (PUBLIC_API_BASE). null when unset, in which case the frontend falls back to the browser URL
+          example: https://platform.org-a
+
+    AuthConfig:
+      type: object
+      description: Public login page settings (available without logging in); the login page uses them to decide whether to show the password form / SSO button
+      required: [passwordLogin, ldapLogin]
+      properties:
+        passwordLogin:
+          type: boolean
+          description: Whether to show the password form (local accounts, or password-based SSO such as LDAP)
+        ldapLogin:
+          type: boolean
+          description: Whether password login also goes through LDAP, so a failed sign-in may mean the user's groups map to no role rather than a wrong password
+        ssoLoginUrl:
+          type: string
+          nullable: true
+          description: Login entry point for redirect-based SSO (such as OIDC); the login page shows the SSO button only when this is set
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, example: admin }
+        password: { type: string, format: password }
+
+    SmtpSettings:
+      type: object
+      description: SMTP settings for alert notifications. password is accepted only on PUT and never returned by GET (secrets are write-only)
+      required: [host, port, from, to]
+      properties:
+        host: { type: string, example: smtp.org-a.internal }
+        port: { type: integer, example: 587 }
+        username: { type: string, nullable: true }
+        password: { type: string, format: password, nullable: true }
+        security:
+          allOf: [{ $ref: '#/components/schemas/SmtpSecurity' }]
+          description: Optional on PUT and test; when omitted, port 465 means tls and any other port means none. GET always returns it
+        from: { type: string, example: 'alerts@org-a.example' }
+        to:
+          type: array
+          items: { type: string }
+          minItems: 1
+
+    SmtpSecurity:
+      type: string
+      description: >
+        Connection encryption. none = plain text; starttls = upgrade with STARTTLS after connecting (fails if the server does not offer it);
+        tls = TLS from the first byte (implicit TLS, usually port 465). starttls and tls verify the server certificate against the system trust store
+      enum: [none, starttls, tls]
+      x-enum-varnames: [SmtpSecurityNone, SmtpSecurityStarttls, SmtpSecurityTls] # pin the constant names, same as NotifyLanguage
+
+    AlertWebhookUrl:
+      type: object
+      required: [label, url]
+      properties:
+        label: { type: string, example: 'ops-monitor' }
+        url: { type: string, example: 'https://monitor.org-a.internal/alertmanager' }
+
+    TelegramSettings:
+      type: object
+      description: Telegram settings for alert notifications. botToken is accepted only on PUT / test and never returned by GET
+      required: [chatId]
+      properties:
+        botToken: { type: string, format: password, nullable: true, example: '123456:ABC-DEF...' }
+        chatId: { type: integer, format: int64, example: -1001234567890, description: 'Usually negative for groups' }
+        messageThreadId: { type: integer, format: int64, nullable: true, description: 'Topic within the group (optional)' }
+
+    SlackSettings:
+      type: object
+      description: Slack settings for alert notifications (incoming webhook). webhookUrl is accepted only on PUT / test and never returned by GET (the URL itself is the credential); GET returning this object means Slack is enabled
+      properties:
+        webhookUrl: { type: string, format: password, nullable: true, example: 'https://hooks.slack.com/services/T000/B000/XXXX' }
+
+    AlertSettings:
+      type: object
+      description: Alert notification channel settings. The platform's own Alertmanager webhook receiver (which feeds GET /alerts) is always on and not configured here.
+      required: [webhookUrls, locale, customCa]
+      properties:
+        locale: { $ref: '#/components/schemas/AlertLocaleView' }
+        customCa:
+          type: boolean
+          readOnly: true
+          description: The deployment sets SMTP_CA_FILE, so STARTTLS and TLS trust only the CA certificates in that file (for alert mail and password mail alike)
+        smtp:
+          allOf: [{ $ref: '#/components/schemas/SmtpSettings' }]
+          nullable: true
+          description: Email notifications are disabled when unset
+        telegram:
+          allOf: [{ $ref: '#/components/schemas/TelegramSettings' }]
+          nullable: true
+          description: Telegram notifications are disabled when unset
+        slack:
+          allOf: [{ $ref: '#/components/schemas/SlackSettings' }]
+          nullable: true
+          description: Slack notifications are disabled when unset
+        webhookUrls:
+          type: array
+          items: { $ref: '#/components/schemas/AlertWebhookUrl' }
+
+    NotifyLanguage:
+      type: string
+      description: Language of alert notifications and of the default rules' text
+      enum: [zh, en]
+      x-enum-varnames: [NotifyLanguageZh, NotifyLanguageEn] # pin the constant names: oapi-codegen's default naming drifts as same-named enums are added or removed
+
+    AlertLocale:
+      type: object
+      description: >
+        Language and time zone of alert notifications, shared by every channel. New installs start with en and an
+        empty time zone, which follows the platform host's zone.
+      required: [language, timezone]
+      properties:
+        language: { $ref: '#/components/schemas/NotifyLanguage' }
+        timezone: { type: string, example: Asia/Taipei, description: 'IANA time zone name; notification times are shown in this zone, followed by its name. Empty = follow the platform host (its TZ; UTC when the host zone is unknown)' }
+
+    AlertLocaleView:
+      type: object
+      description: The stored locale plus the zone notifications actually use
+      required: [language, timezone, effectiveTimezone]
+      properties:
+        language: { $ref: '#/components/schemas/NotifyLanguage' }
+        timezone: { type: string, example: '', description: 'As stored; empty = follow the platform host' }
+        effectiveTimezone: { type: string, example: Asia/Taipei, description: 'The IANA zone notification times are shown in: timezone, or the host zone when timezone is empty' }
+
+    AlertRuleOperator:
+      type: string
+      enum: [gt, lt, gte, lte]
+
+    AlertRuleDuration:
+      type: string
+      description: >
+        How long the condition must hold before firing (an allowlist; free-form PromQL duration syntax is not accepted). 0s = immediately (fires on the next evaluation after the condition holds).
+        Also the allowed values for keepFiringFor (0s = no wait)
+      enum: ['0s', '1m', '2m', '5m', '10m', '30m', '1h']
+
+    AlertRuleKind:
+      type: string
+      description: >
+        threshold = metric threshold rule (all user-added rules are this kind); metric/operator/threshold/nodeId can be changed.
+        The others are default rules whose conditions are hard-coded in the platform, and only name, enabled, forDuration, keepFiringFor and severity can be changed - platform_down (the platform itself cannot be scraped),
+        node_offline (agent offline), besu_metrics_down (agent up but Besu metrics cannot be scraped),
+        validators_missing (some validators are not producing blocks but the chain still is), quorum_lost (more validators than the fault tolerance are not producing and the chain has stopped producing blocks).
+        chain_slow (time since the last block exceeds threshold times the normal block time) can additionally change threshold (at least 1).
+        chain_slow, validators_missing and quorum_lost apply to the whole chain, not to individual nodes.
+      enum: [threshold, platform_down, node_offline, besu_metrics_down, chain_slow, validators_missing, quorum_lost]
+      x-enum-varnames: [AlertRuleKindThreshold, AlertRuleKindPlatformDown, AlertRuleKindNodeOffline, AlertRuleKindBesuMetricsDown, AlertRuleKindChainSlow, AlertRuleKindValidatorsMissing, AlertRuleKindQuorumLost] # pin the constant names, same as AlertStatus
+
+    AlertRuleCreateRequest:
+      type: object
+      description: >
+        Create/update payload for a user-defined alert rule. Raw PromQL is deliberately not accepted: the backend builds the
+        Prometheus rule from these structured fields using an allowlist, so one broken expression cannot take down the whole rule file.
+      required: [name, metric, operator, threshold, forDuration, severity]
+      properties:
+        name: { type: string, example: 'node-a1 CPU high' }
+        metric: { $ref: '#/components/schemas/MetricId' }
+        nodeId: { type: string, nullable: true, description: 'Omitted = whole fleet (evaluated separately for each of our nodes)' }
+        operator: { $ref: '#/components/schemas/AlertRuleOperator' }
+        threshold: { type: number, example: 80 }
+        forDuration: { $ref: '#/components/schemas/AlertRuleDuration' }
+        severity: { type: string, enum: [critical, warning] }
+        enabled: { type: boolean, default: true }
+        keepFiringFor:
+          allOf: [{ $ref: '#/components/schemas/AlertRuleDuration' }]
+          description: How long the condition must stay false before the alert counts as resolved (debounce, maps to Prometheus keep_firing_for); 0s = no wait. Omitted = 0s
+        clearThreshold:
+          type: number
+          nullable: true
+          description: >
+            Resolve threshold for threshold rules (dual-threshold debounce). Firing uses threshold; resolving requires crossing back past clearThreshold, e.g. fire at > 90, resolve at ≤ 85.
+            Must not exceed threshold for gt/gte, nor be below it for lt/lte. Omitted = same as threshold
+
+    AlertRuleUpdateRequest:
+      type: object
+      description: >
+        Update payload. For kind=threshold, metric/operator/threshold are required; for kind=chain_slow, threshold is required (a multiplier, at least 1)
+        and metric/operator/nodeId are not accepted. Other kinds have fixed conditions, and sending metric/operator/threshold/nodeId returns 400.
+      required: [name, forDuration, severity]
+      properties:
+        name: { type: string }
+        metric: { $ref: '#/components/schemas/MetricId' }
+        nodeId: { type: string, nullable: true, description: 'Omitted = whole fleet' }
+        operator: { $ref: '#/components/schemas/AlertRuleOperator' }
+        threshold: { type: number }
+        forDuration: { $ref: '#/components/schemas/AlertRuleDuration' }
+        severity: { type: string, enum: [critical, warning] }
+        enabled: { type: boolean, default: true }
+        keepFiringFor:
+          allOf: [{ $ref: '#/components/schemas/AlertRuleDuration' }]
+          description: How long the condition must stay false before the alert counts as resolved (debounce, maps to Prometheus keep_firing_for); 0s = no wait. Omitted = unchanged
+        clearThreshold:
+          type: number
+          nullable: true
+          description: >
+            Resolve threshold for threshold rules (dual-threshold debounce). Firing uses threshold; resolving requires crossing back past clearThreshold, e.g. fire at > 90, resolve at ≤ 85.
+            Must not exceed threshold for gt/gte, nor be below it for lt/lte. Omitted = unchanged; if a new threshold crosses the existing resolve threshold, the resolve threshold resets to threshold
+            (to drop the dual threshold, send the same value as threshold). Returns 400 for rules with fixed conditions
+
+    AlertRule:
+      type: object
+      description: >
+        An alert rule. Default rules are created by the platform at startup; like user-added rules they can be edited and disabled, but not deleted. User-added rules can be deleted in Enterprise.
+        metric/operator/threshold/nodeId/clearThreshold exist only for kind=threshold; kind=chain_slow has only threshold (a multiplier).
+      required: [id, kind, isDefault, alertname, name, forDuration, keepFiringFor, severity, enabled, createdBy, updatedBy, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        kind: { $ref: '#/components/schemas/AlertRuleKind' }
+        isDefault: { type: boolean, description: 'Default rule (restore-defaults resets it to default values). For default threshold rules, metric/operator/nodeId are fixed and only the threshold can change' }
+        alertname: { type: string, description: 'Name of the alert when it fires (matches Alert.alertname)', example: NodeCpuHigh }
+        name: { type: string, example: NodeCpuHigh }
+        metric: { $ref: '#/components/schemas/MetricId' }
+        nodeId: { type: string, nullable: true }
+        operator: { $ref: '#/components/schemas/AlertRuleOperator' }
+        threshold: { type: number }
+        forDuration: { $ref: '#/components/schemas/AlertRuleDuration' }
+        keepFiringFor: { $ref: '#/components/schemas/AlertRuleDuration' }
+        clearThreshold: { type: number, nullable: true, description: 'Resolve threshold; null = same as threshold' }
+        severity: { type: string, enum: [critical, warning] }
+        enabled: { type: boolean }
+        createdBy: { type: string, description: 'Display name of the user who created it (for auditing); system for default rules created at startup, the user who restored defaults for one recreated by a restore' }
+        updatedBy: { type: string, description: 'Display name of the user who last edited it or restored defaults; system for a default rule nobody has touched' }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+        updatedAt: { $ref: '#/components/schemas/Timestamp' }
+
+    PolicyApplyNodeResult:
+      type: object
+      description: Result of comparing one node's account allowlist with the organization policy.
+      required: [nodeId, state]
+      properties:
+        nodeId: { type: string }
+        state:
+          type: string
+          description: >
+            Compared against this node's effective list ((uses shared list ? shared list : empty) ∪ directly added addresses).
+            in_sync = the node's allowlist matches the policy; drift = it does not (on PUT, the read-back after sending still differs; on GET, someone changed it on the node);
+            disabled = the node has no account allowlist enabled (PERM namespace off or allowlist file not enabled; see error);
+            unreachable = the node is offline or cannot be reached (see error);
+            rejected = the node is reachable but Besu refused to read or write the allowlist (e.g. the permissions file is not writable); error is Besu's original message.
+          enum: [in_sync, drift, disabled, unreachable, rejected]
+          x-enum-varnames: [PolicyApplyInSync, PolicyApplyDrift, PolicyApplyDisabled, PolicyApplyUnreachable, PolicyApplyRejected] # pin the constant names: oapi-codegen's default naming drifts as same-named enums are added or removed
+        error: { type: string, nullable: true, description: 'English description of the failure (for developers and logs); the UI displays reason' }
+        reason:
+          allOf: [{ $ref: '#/components/schemas/ErrorReason' }]
+          nullable: true
+          description: Failure reason code (same as Error.reason; the UI translates it into the user's language)
+        params:
+          type: object
+          nullable: true
+          additionalProperties: { type: string }
+          description: Variable values in the reason message
+        currentAllowlist:
+          type: array
+          nullable: true
+          items: { type: string }
+          description: The node's current account allowlist (on GET, from the platform's latest collection round; on PUT, the read-back after sending); null when it could not be read. Used by "Import from nodes" on first use.
+    PermissioningSaveResult:
+      type: object
+      required: [policyRevision, nodes]
+      properties:
+        policyRevision: { type: integer, format: int64 }
+        nodes: { type: array, items: { $ref: '#/components/schemas/PolicyApplyNodeResult' } }
+    NodeNameRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          nullable: true
+          maxLength: 64
+          description: Display name; null or an empty string clears it and the UI shows the node id instead
+          example: Taipei primary validator
+    NodePortsRequest:
+      type: object
+      required: [rpcPort, metricsPort]
+      properties:
+        rpcPort: { type: integer, minimum: 1, maximum: 65535, example: 8545 }
+        metricsPort: { type: integer, minimum: 1, maximum: 65535, example: 9545 }
+    NodeLogLevelRequest:
+      type: object
+      required: [level]
+      properties:
+        level:
+          type: string
+          enum: ['OFF', FATAL, ERROR, WARN, INFO, DEBUG, TRACE, ALL]
+          x-enum-varnames: [LogLevelOff, LogLevelFatal, LogLevelError, LogLevelWarn, LogLevelInfo, LogLevelDebug, LogLevelTrace, LogLevelAll] # pin the constant names: oapi-codegen's default naming drifts as same-named enums are added or removed
+
+    PermissioningPolicy:
+      type: object
+      description: >
+        Organization-level Besu account allowlist. accountsAllowlist is the shared list, applied to nodes with "Use shared list" turned on;
+        each node's effective list = (uses shared list ? shared list : empty) ∪ the addresses added to that node directly (see custom). There is no enable switch:
+        whether the allowlist is enabled is decided by the node's startup options, and the platform only detects it (see nodes for per-node results).
+        nodes and custom are read-only and may be omitted from requests; if sent they are ignored, whatever their content.
+      required: [accountsAllowlist, revision]
+      properties:
+        revision:
+          type: integer
+          format: int64
+          description: List revision. On PUT, send the revision shown on screen; if it differs from the current one, 409 is returned (someone else saved first) so their changes are not overwritten
+        accountsAllowlist:
+          type: array
+          items: { type: string, pattern: '^0x[0-9a-fA-F]{40}$' }
+          description: Account addresses allowed to send transactions (0x...)
+        nodes:
+          type: array
+          readOnly: true
+          description: Returned on GET - each node's current allowlist compared with the policy (from the platform's latest collection round, taken every 10 seconds; until the first round after a save, the list the platform read back from each node while saving). Ignored on PUT.
+          items: { $ref: '#/components/schemas/PolicyApplyNodeResult' }
+        custom:
+          type: array
+          readOnly: true
+          description: Returned on GET - nodes that have directly added addresses or have the shared list turned off (the latter, when it has no addresses, has revision 0 and an empty list). Ignored on PUT.
+          items: { $ref: '#/components/schemas/NodeAllowlist' }
+
+    NodeAllowlist:
+      type: object
+      description: Addresses added directly to one node (on top of the shared list) and its use-shared-list switch.
+      required: [nodeId, revision, accountsAllowlist, useShared]
+      properties:
+        nodeId: { type: string }
+        revision: { type: integer, format: int64, description: 'Revision of this list, sent back when saving; 0 when there are no directly added addresses' }
+        accountsAllowlist:
+          type: array
+          items: { type: string, pattern: '^0x[0-9a-fA-F]{40}$' }
+        useShared: { type: boolean, description: 'Whether this node uses the shared list' }
+
+    NodeAllowlistSharedRequest:
+      type: object
+      required: [useShared]
+      properties:
+        useShared: { type: boolean }
+
+    PasswordChange:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword: { type: string, format: password }
+        newPassword: { type: string, format: password, description: 'At least 12 characters and at most 72 bytes; must not contain the username, be a common password, or equal the current password. A rejected password answers 400 with the rule it broke as the reason' }
+
+    LoginResult:
+      type: string
+      enum: [success, failure]
+      x-enum-varnames: [LoginResultSuccess, LoginResultFailure]
+
+    LoginFailReason:
+      type: string
+      enum: [bad_password, unknown_user, disabled, no_role]
+      x-enum-varnames: [LoginFailBadPassword, LoginFailUnknownUser, LoginFailDisabled, LoginFailNoRole]
+      description: bad_password = wrong password; unknown_user = account does not exist; disabled = account is disabled; no_role = correct credentials but no role this edition recognizes (SSO groups map to no role, or the local account's role does not exist in this edition)
+
+    LoginEvent:
+      type: object
+      description: One login attempt.
+      required: [id, at, username, result, reason, sourceIp]
+      properties:
+        id: { type: string }
+        at: { type: string, format: date-time }
+        username: { type: string, nullable: true, description: 'Account used to log in; null when the account does not exist (what the user typed into the account field is not recorded)' }
+        result: { $ref: '#/components/schemas/LoginResult' }
+        reason:
+          allOf: [{ $ref: '#/components/schemas/LoginFailReason' }]
+          nullable: true
+          description: Present only on failure
+        sourceIp: { type: string, description: 'Source IP of the connection; empty string when it cannot be determined' }
+
+    LoginEventList:
+      type: object
+      required: [events, truncated]
+      properties:
+        events:
+          type: array
+          items: { $ref: '#/components/schemas/LoginEvent' }
+        truncated: { type: boolean, description: 'More than 500 entries; only the latest 500 were returned' }
+
+    LocalUser:
+      type: object
+      required: [username, role, disabled, mustChangePassword, createdAt]
+      properties:
+        username: { type: string }
+        role: { $ref: '#/components/schemas/Role' }
+        disabled: { type: boolean }
+        mustChangePassword: { type: boolean, description: 'The initial or reset password has not been changed yet' }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+        lastLoginAt:
+          allOf: [{ $ref: '#/components/schemas/Timestamp' }]
+          nullable: true
+        email: { type: string, nullable: true, description: 'Optional; temporary-password emails are sent here. null for the default admin and for accounts without one' }
+
+    LocalUserCreateRequest:
+      type: object
+      required: [username, role]
+      properties:
+        username: { type: string, pattern: '^[A-Za-z0-9._-]{1,64}$' }
+        role: { $ref: '#/components/schemas/Role' }
+        email: { type: string, description: 'Optional; a single email address (without a display name). Cannot be changed after creation' }
+        sendEmail: { type: boolean, description: 'Mail the temporary password to email instead of returning it in the response; omitted = do not send' }
+
+    PasswordDelivery:
+      type: string
+      enum: [email, shown]
+      x-enum-varnames: [PasswordDeliveryEmail, PasswordDeliveryShown]
+      description: How the temporary password is delivered. email = mailed; shown = in generatedPassword of this response, for the admin to hand over
+
+    LocalUserCreated:
+      type: object
+      required: [user, delivery]
+      properties:
+        user: { $ref: '#/components/schemas/LocalUser' }
+        delivery: { $ref: '#/components/schemas/PasswordDelivery' }
+        generatedPassword: { type: string, nullable: true, description: 'Temporary password when delivery = shown; appears only in this response' }
+        mailError: { type: string, nullable: true, description: 'English description of why sending the email failed (the UI displays mailReason), e.g. the mail server is unreachable. The account is still created and the temporary password is shown on screen for the admin to hand over' }
+        mailReason:
+          allOf: [{ $ref: '#/components/schemas/ErrorReason' }]
+          nullable: true
+          description: Code for why sending the email failed (same as Error.reason; the UI translates it into the user's language)
+        mailParams:
+          type: object
+          nullable: true
+          additionalProperties: { type: string }
+          description: Variable values in the mailReason message
+
+    AccountMailStatus:
+      type: object
+      required: [configured]
+      properties:
+        configured: { type: boolean, description: 'A mail server for password emails was configured at deployment (ACCOUNT_SMTP_*)' }
+
+    LocalUserUpdateRequest:
+      type: object
+      required: [disabled]
+      properties:
+        disabled: { type: boolean }
+
+    PasswordResetRequest:
+      type: object
+      properties:
+        sendEmail: { type: boolean, description: 'Mail the new password to the account''s email; omitted = do not send' }
+
+    PasswordResetResult:
+      type: object
+      required: [delivery]
+      properties:
+        delivery: { $ref: '#/components/schemas/PasswordDelivery' }
+        email: { type: string, nullable: true, description: 'This account''s email (where the password was sent, if it was mailed)' }
+        generatedPassword: { type: string, nullable: true, description: 'New password when delivery = shown; appears only in this response' }
+        mailError: { type: string, nullable: true, description: 'English description of why sending the email failed (the UI displays mailReason), e.g. the mail server is unreachable. The password is still reset and the temporary password is shown on screen for the admin to hand over' }
+        mailReason:
+          allOf: [{ $ref: '#/components/schemas/ErrorReason' }]
+          nullable: true
+          description: Code for why sending the email failed (same as Error.reason; the UI translates it into the user's language)
+        mailParams:
+          type: object
+          nullable: true
+          additionalProperties: { type: string }
+          description: Variable values in the mailReason message
+
+    NodeStatus:
+      type: string
+      enum: [healthy, syncing, offline, unknown, rpc_unreachable]
+      x-enum-varnames: [NodeStatusHealthy, NodeStatusSyncing, NodeStatusOffline, NodeStatusUnknown, NodeStatusRpcUnreachable] # pin the constant names: oapi-codegen's default naming drifts as same-named enums are added or removed
+      description: >
+        Maps to the brand.status colors - healthy = green / syncing = amber /
+        offline = red (was connected, agent now disconnected) /
+        unknown = gray (never connected) /
+        rpc_unreachable = amber (agent online but the platform cannot reach the node's RPC, so chain state is unknown; the capability list explains why)
+
+    HourState:
+      type: string
+      enum: [ok, degraded, down, unknown]
+      x-enum-varnames: [HourOk, HourDegraded, HourDown, HourUnknown]
+      description: >
+        State of a one-hour slot - ok = normal; unknown = no data. For a node's availability24h, degraded = lagging and down = host or Besu metrics were unreadable for 2 consecutive minutes.
+        For the chain's stability24h, degraded = block production slowed (reached the ChainSlow multiplier) and down = severely slowed (reached the ChainSlowSevere multiplier)
+
+    ConsensusAlgorithm:
+      type: string
+      enum: [ibft2, qbft]
+
+    CertStatus:
+      type: string
+      description: >
+        Status of the latest node certificate the platform **issued**, not the one the node holds.
+        valid = valid / untrusted = not trusted by the platform (no record under the current CA / revoked / expired).
+        There is no "expiring soon" state, since a certificate briefly falls in that window before every normal rotation and that cannot be told apart from a failed rotation.
+      enum: [valid, untrusted]
+
+    NodeCertStatus:
+      type: object
+      description: Node certificate / connection status (top of the node settings page). An untrusted certificate means the one held was not signed by the platform's current CA, which is common after a CA reset
+      required: [connection, cert]
+      properties:
+        connection:
+          type: string
+          enum: [connected, lost]
+          x-enum-varnames: [NodeCertStatusConnectionConnected, NodeCertStatusConnectionLost] # pin the constant names: oapi-codegen's default naming drifts as same-named enums are added or removed
+          description: Whether the collector can reach the agent
+        lastSeen: { type: string, format: date-time, nullable: true }
+        cert: { $ref: '#/components/schemas/CertStatus' }
+        notAfter: { type: string, format: date-time, nullable: true }
+        serial: { type: string, nullable: true }
+
+    MetricId:
+      type: string
+      description: Time-series metric (basic tier). blocks_behind = blocks behind, the larger of the highest block the node learned from peers minus its own height (same scrape) and the value the platform computes from this organization's chain head (scrape times differ per node, so values below the tolerance count as 0). txpool_added / txpool_removed / txpool_rejected = transactions per second entering the pool, leaving it (included in a block, replaced or dropped) and rejected. jvm_heap = percentage of Besu's Java heap in use (jvm_memory_used_bytes ÷ jvm_memory_max_bytes, area=heap). txpool_usage = percentage of the transaction pool in use (transactions in the pool ÷ the count limit; only the sequenced pool has a limit, so layered pools have no such series). txpool_oldest = seconds the oldest transaction in the pool has waited (0 for an empty pool; includes transactions stuck behind a nonce gap)
+      enum:
+        - cpu
+        - mem
+        - disk
+        - net_rx
+        - net_tx
+        - peer_count
+        - chain_height
+        - blocks_behind
+        - block_time
+        - txpool_pending
+        - tps
+        - txpool_added
+        - txpool_removed
+        - txpool_rejected
+        - jvm_heap
+        - txpool_usage
+        - txpool_oldest
+
+    # ── Nodes ─────────────────────────────────────────────
+    NodeSummary:
+      type: object
+      description: Row of the "My nodes" list (basic fields). The Enterprise cross-organization endpoint on 8544 (GET /cross-org/nodes) returns the same shape but only with id, org, address, status, besuRunning, chainHeight, peerCount, isValidator, blocksBehind, availability24h, cpuPercent, memPercent, jvmHeapPercent, diskUsedPercent, clientVersion and asOf (the host figures among them require the host scope); name, ports, RPC authentication, certificate and quarantine state are never included.
+      required: [id, org, status, asOf]
+      properties:
+        id: { type: string, example: node-a1 }
+        name: { type: string, nullable: true, description: 'Display name given by a user in this organization; null = the UI shows the id. Not included by cross-organization endpoints', example: Taipei primary validator }
+        org: { type: string, description: 'Id of the owning organization', example: org-a }
+        address: { type: string, nullable: true, description: 'Node address (derived from the net_enode public key; compared with PeerInfo.address to identify the node); null until read', example: '0x91f4480cdcb13537c4c08d4ab060eaa0ecc42bbc' }
+        status: { $ref: '#/components/schemas/NodeStatus' }
+        besuRunning: { $ref: '#/components/schemas/BesuRunning' }
+        chainHeight: { type: integer, format: int64, nullable: true, example: 1284553 }
+        peerCount: { type: integer, nullable: true, example: 7 }
+        isValidator: { type: boolean, nullable: true, example: true }
+        rpcAuthEnabled: { $ref: '#/components/schemas/RpcAuthEnabled' }
+        reportedEnode:
+          type: string
+          nullable: true
+          description: The enode reported by the node's net_enode (the address is Besu's --p2p-host, which other nodes may not be able to reach); null until read
+          example: 'enode://abc…@10.0.0.31:30303'
+        rpcPort:
+          type: integer
+          nullable: true
+          description: The node's local JSON-RPC port. The platform puts it in X-Target (127.0.0.1:<port>) when forwarding through the agent tunnel.
+          example: 8545
+        metricsPort:
+          type: integer
+          nullable: true
+          description: The node's local metrics port.
+          example: 9545
+        peerMode: { $ref: '#/components/schemas/PeerMode' }
+        capabilities:
+          allOf: [{ $ref: '#/components/schemas/NodeCapabilities' }]
+          nullable: true
+          description: Capability list, same as NodeDetail; the node list uses it to flag what each node is missing. Not included by cross-organization endpoints
+        cpuPercent: { type: number, format: float, nullable: true, description: 'Host CPU usage (%); null when the agent reports no host metrics', example: 42.3 }
+        diskUsedPercent: { type: number, format: float, nullable: true, description: 'Data disk usage (%); null when the agent reports no host metrics', example: 61.0 }
+        memPercent: { type: number, format: float, nullable: true, description: 'Host memory usage (%, memUsedBytes ÷ memTotalBytes); null when the agent reports no host metrics', example: 44.4 }
+        jvmHeapPercent: { type: number, format: float, nullable: true, description: 'Percentage of Besu''s own memory allowance (Java heap) in use (jvm_memory_used_bytes ÷ jvm_memory_max_bytes, area=heap); null when Besu metrics cannot be read', example: 5.2 }
+        availability24h:
+          type: array
+          items: { $ref: '#/components/schemas/HourState' }
+          description: >
+            One slot per hour for the last 24 hours, 24 slots from oldest to newest (the last slot is the hour ending now). down = host or Besu metrics were unreadable for 2 consecutive minutes within that hour
+            (matching the NodeOffline / BesuMetricsDown alerts; time when the platform itself was down does not count); degraded = not down, but lagged by ≥ 5 blocks at some point;
+            unknown = no data for this node in that hour
+        txpoolPending: { type: integer, nullable: true, description: 'Number of pending transactions; null when RPC is unreachable or TXPOOL is not enabled on the node', example: 3 }
+        blocksBehind: { type: integer, nullable: true, description: 'Blocks behind - the larger of what Besu reports (highestBlock − currentBlock from eth_syncing, 0 when in sync) and what the platform computes from this organization''s chain head (0 below the tolerance); nodes without peers rely on the latter. null when RPC is unreachable', example: 0 }
+        clientVersion: { type: string, nullable: true, description: 'Client version reported by web3_clientVersion; null when RPC is unreachable', example: 'besu/v25.4.1/linux-x86_64/openjdk-java-21' }
+        asOf: { $ref: '#/components/schemas/Timestamp' }
+        quarantinedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            Non-null = this node is still dialing into the platform with a **revoked** certificate and has been quarantined (excluded from SD, no longer scraped). Cleared automatically once the node
+            reconnects with a valid certificate or re-enrolls successfully. Expired certificates or ones not issued by this organization never end up here;
+            both are rejected during the TLS handshake and only show as offline.
+        agentOutdatedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            Non-null = this node's agent protocol version is older than the platform requires and its latest connection was rejected at this time (HTTP 426); the agent needs upgrading.
+            Cleared once a compatible version connects. Kept only in platform memory; after a platform restart the agent's next reconnect records it again.
+        lastSeen:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the platform last collected from this node's agent (the same value as lastSeen in GET /nodes/{id}/cert); null when it has nothing collected
+
+    NodeDetail:
+      type: object
+      description: Details of a node in this organization. The Enterprise cross-organization endpoint on 8544 (GET /cross-org/nodes/{id}) returns the same shape but only with id, org, status, besuRunning, validatorAddress, clientVersion, hardware, p2p (only peerCount, peerLimit, inSync), ledger, consensus and asOf; ports, RPC authentication, enode, quarantine state and the capability list are never included. Charts (GET /cross-org/nodes/{id}/series) return MetricSeries with the same parameters as getNodeSeries.
+      required: [id, org, status, asOf]
+      properties:
+        id: { type: string }
+        name: { type: string, nullable: true, description: 'Display name given by a user in this organization; null = the UI shows the id. Not included by cross-organization endpoints' }
+        org: { type: string }
+        status: { $ref: '#/components/schemas/NodeStatus' }
+        besuRunning: { $ref: '#/components/schemas/BesuRunning' }
+        rpcAuthEnabled: { $ref: '#/components/schemas/RpcAuthEnabled' }
+        rpcPort:
+          type: integer
+          nullable: true
+          description: The node's local JSON-RPC port. The platform puts it in X-Target (127.0.0.1:<port>) when forwarding through the agent tunnel.
+          example: 8545
+        metricsPort:
+          type: integer
+          nullable: true
+          description: The node's local metrics port.
+          example: 9545
+        reportedEnode:
+          type: string
+          nullable: true
+          description: The enode reported by the node's net_enode (the address is Besu's --p2p-host, which other nodes may not be able to reach); null until read
+        clientVersion: { type: string, nullable: true, description: 'Client version reported by web3_clientVersion; null when RPC is unreachable', example: 'besu/v25.4.1/linux-x86_64/openjdk-java-21' }
+        validatorAddress:
+          type: string
+          nullable: true
+          description: Validator address derived from the node key (the platform derives it from the net_enode enode)
+          example: '0xA11c3f2…'
+        quarantinedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            Non-null = this node is still dialing into the platform with a **revoked** certificate and has been quarantined (excluded from SD, no longer scraped). Cleared automatically once the node
+            reconnects with a valid certificate or re-enrolls successfully. Expired certificates or ones not issued by this organization never end up here;
+            both are rejected during the TLS handshake and only show as offline.
+        agentOutdatedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            Non-null = this node's agent protocol version is older than the platform requires and its latest connection was rejected at this time (HTTP 426); the agent needs upgrading.
+            Cleared once a compatible version connects. Kept only in platform memory; after a platform restart the agent's next reconnect records it again.
+        hardware:
+          allOf: [{ $ref: '#/components/schemas/HardwareMetrics' }]
+          nullable: true
+        p2p:
+          allOf: [{ $ref: '#/components/schemas/P2PStatus' }]
+          nullable: true
+        ledger:
+          allOf: [{ $ref: '#/components/schemas/LedgerSummary' }]
+          nullable: true
+        consensus:
+          allOf: [{ $ref: '#/components/schemas/ConsensusStatus' }]
+          nullable: true
+        capabilities:
+          allOf: [{ $ref: '#/components/schemas/NodeCapabilities' }]
+          nullable: true
+          description: Capability list
+        asOf: { $ref: '#/components/schemas/Timestamp' }
+
+    # ── Per-layer metrics (basic tier) ──────────────
+    HardwareMetrics:
+      type: object
+      description: Basic hardware metrics
+      properties:
+        active: { type: boolean }
+        cpuPercent: { type: number, format: float, example: 42.3 }
+        memUsedBytes: { type: integer, format: int64 }
+        memTotalBytes: { type: integer, format: int64 }
+        diskUsedPercent: { type: number, format: float, example: 61.0 }
+        diskDaysLeft:
+          type: number
+          format: float
+          nullable: true
+          description: Days until the disk is full, projected from disk usage growth over the last 7 days; null when usage is not growing, there is less than 7 days of data, or it exceeds 365 days (see diskDaysLeftReason for which)
+        diskDaysLeftReason:
+          type: string
+          enum: [insufficient_data, not_growing, over_a_year]
+          x-enum-varnames: [DiskDaysLeftInsufficientData, DiskDaysLeftNotGrowing, DiskDaysLeftOverAYear] # pin the constant names: oapi-codegen's default naming drifts as same-named enums are added or removed
+          description: Why diskDaysLeft is null - less than 7 days of data, not growing, or more than 365 days. Omitted when there is a day count, or when the platform has no disk data yet (unknown)
+        netRxBytesPerSec: { type: integer, format: int64 }
+        netTxBytesPerSec: { type: integer, format: int64 }
+
+    P2PStatus:
+      type: object
+      description: Basic P2P metrics
+      properties:
+        enode: { type: string, example: 'enode://abc...@10.0.0.1:30303' }
+        peerCount: { type: integer, example: 7 }
+        peerLimit: { type: integer, example: 25 }
+        inSync: { type: boolean }
+
+    LedgerSummary:
+      type: object
+      description: Basic ledger metrics
+      properties:
+        chainHeight: { type: integer, format: int64, example: 1284553 }
+        blocksBehind: { type: integer, example: 0, description: 'Blocks behind, same as NodeSummary.blocksBehind (the larger of the self-reported value and the one the platform computes from the chain head)' }
+        txpoolPending: { type: integer, example: 12 }
+        tps: { type: number, format: float, example: 3.4 }
+
+    ConsensusStatus:
+      type: object
+      description: Basic consensus metrics (part of the basic set)
+      properties:
+        algorithm: { $ref: '#/components/schemas/ConsensusAlgorithm' }
+        validatorCount: { type: integer, example: 4 }
+        isValidator: { type: boolean }
+        validators:
+          type: array
+          description: Current set of validator addresses
+          items: { type: string, example: '0xabc...' }
+        proposerMetrics:
+          type: array
+          description: Distribution of block proposals per validator over the last 1000 blocks (read by the platform via ibft/qbft_getSignerMetrics; the first round after a node joins uses Besu's default of 100 blocks; omitted when unavailable)
+          items: { $ref: '#/components/schemas/ProposerMetric' }
+
+    ProposerMetric:
+      type: object
+      description: Advanced consensus - block proposals of a single validator within the recent block window
+      required: [address, proposedBlockCount, lastProposedBlockNumber]
+      properties:
+        address: { type: string, example: '0xabc...' }
+        proposedBlockCount: { type: integer, example: 25 }
+        lastProposedBlockNumber: { type: integer, example: 10231 }
+
+    # ── Time series ─────────────────────────────────────────
+    MetricSeries:
+      type: object
+      required: [metric, points]
+      properties:
+        metric: { $ref: '#/components/schemas/MetricId' }
+        unit: { type: string, nullable: true, example: '%' }
+        points:
+          type: array
+          items: { $ref: '#/components/schemas/MetricPoint' }
+
+    MetricPoint:
+      type: object
+      required: [t, v]
+      properties:
+        t: { $ref: '#/components/schemas/Timestamp' }
+        v: { type: number, format: double, nullable: true }
+
+    FleetNodeStatus:
+      type: object
+      description: >
+        A node whose agent the platform has not been able to reach for at least 10 minutes. Nodes that are fine are not listed,
+        so there is no ok value; a shorter gap is not flagged (it shows as a gap in the chart).
+      required: [nodeId, status, since]
+      properties:
+        nodeId: { type: string, example: node-c1 }
+        status:
+          type: string
+          enum: [unreachable]
+        since:
+          allOf: [{ $ref: '#/components/schemas/Timestamp' }]
+          description: When the agent stopped answering; the displayed duration is always at least the 10-minute threshold
+        reason: { type: string, nullable: true, description: 'Human-readable detail (e.g. "node agent not responding")' }
+
+    # ── Authorization ─────────────────────────────────────────────
+    ValidatorSetEntry:
+      type: object
+      description: A member of the current validator set (read-only, aggregated from the consensus state each node reports)
+      required: [address, connectedNodes, turns]
+      properties:
+        address: { type: string, example: '0xabc...' }
+        orgId: { type: string, nullable: true, example: org-a, description: 'null when the identity cannot be found; left blank rather than made up' }
+        nodeId: { type: string, nullable: true, description: 'Node id known to the platform; null if not provisioned by this platform' }
+        name:
+          type: string
+          nullable: true
+          description: Name a user gave this validator (PUT /peer-names/{address}); null if unnamed. Displays fall back to nodeId when there is no name
+        turns:
+          type: array
+          description: >
+            Outcome of every turn this validator had to propose within the last 1000 blocks (the same range as signer metrics), oldest to newest. Derived from block headers -
+            if a block's round is r, then ordering that block's validator set by address, the r validators just before the actual proposer had their turn but did not produce a block. There are fewer entries when the chain has fewer than 1000 blocks
+            or the platform has just started and has not backfilled blocks yet.
+          items: { $ref: '#/components/schemas/ValidatorTurn' }
+        connectedNodes:
+          type: integer
+          nullable: true
+          description: How many of this organization's nodes that reported a peer list currently have a P2P connection to it (matched by deriving addresses from admin_peers public keys). null = no node in this organization reported a peer list this round (ADMIN not enabled, nodes offline, or the platform just restarted), so it is unknown. Informational only; the platform does not alert on it
+          example: 2
+        producing:
+          type: boolean
+          nullable: true
+          description: >
+            Whether it is producing blocks. Based on turns for both this organization and others - false if it missed its last 2 turns, true otherwise.
+            This organization's validators also consider node status - false outright when the agent is up but RPC is unreachable (except 401); a disconnected agent counts as false only when the chain has halted
+            (while the chain is still producing, the platform just cannot see the node, so turns decide); nodes that never connected do not count.
+            null = unknown (turns is empty because it just joined and has not had a turn, there is no healthy source node, or the platform just started and has not backfilled blocks).
+            When the chain has halted (the latest block is older than the "severely slowed or stopped" multiplier) there are no new blocks, so other organizations' validators are judged by P2P - false if disconnected from all of this organization's nodes,
+            otherwise the value from before the halt is kept; no judgment is made when none of this organization's nodes returns a peer list or all lists are empty. While halted the UI never shows true (it always shows "Consensus stalled")
+
+    ValidatorTurn:
+      type: object
+      required: [block, proposed]
+      properties:
+        block: { type: integer, format: int64, description: 'Number of the block at which it had its turn' }
+        proposed: { type: boolean, description: 'true = it produced this block; false = it had the turn but the next validator took over' }
+        at: { type: string, format: date-time, nullable: true, description: 'Timestamp of the block it produced; null when proposed is false' }
+        txCount: { type: integer, nullable: true, description: 'Number of transactions in the block it produced; null when proposed is false' }
+        gasUsed: { type: integer, format: int64, nullable: true, description: 'gasUsed of the block it produced; null when proposed is false' }
+        gasLimit: { type: integer, format: int64, nullable: true, description: 'gasLimit of the block it produced (varies per block); null when proposed is false' }
+
+    ChainInfo:
+      type: object
+      description: >
+        Chain-level info. The source is this organization's healthy node with the highest block height (sourceNodeId); with no healthy node, sourceNodeId is null,
+        the other fields are null too and blockIntervals is empty. Block intervals for the last 36 blocks are kept in platform memory and not stored in Prometheus.
+        height and latestBlockAt update every 2 seconds; the rest follow the 10-second collection round.
+      required: [blockIntervals, stability24h, asOf]
+      properties:
+        sourceNodeId: { type: string, nullable: true, example: node-a1 }
+        chainId: { type: integer, format: int64, nullable: true, description: eth_chainId, example: 1337 }
+        consensus:
+          allOf: [{ $ref: '#/components/schemas/ConsensusAlgorithm' }]
+          nullable: true
+        height: { type: integer, format: int64, nullable: true, example: 1284553 }
+        latestBlockAt: { type: string, format: date-time, nullable: true, description: 'Timestamp of the latest block' }
+        blockIntervals:
+          type: array
+          description: Block intervals (seconds) of up to the last 36 blocks, oldest to newest; fewer right after the platform starts or when the chain has fewer than 37 blocks
+          items: { type: number, format: float }
+          example: [2, 2, 2, 4, 2]
+        validatorCount: { type: integer, nullable: true, example: 4 }
+        blockQuorum:
+          type: integer
+          nullable: true
+          description: Block production quorum ⌈2N/3⌉ (N = validatorCount), same as Besu's BftHelpers.calculateRequiredValidatorQuorum; block production stops when fewer validators than this are online
+          example: 3
+        epochLength:
+          type: integer
+          format: int64
+          nullable: true
+          description: IBFT2 / QBFT epoch length (from admin_nodeInfo of any node in this organization with ADMIN enabled; Besu's default of 30000 when genesis does not set it). At each epoch boundary the on-chain tally resets and nodes automatically recast votes that have not taken effect. null when the consensus type is unknown or no node in this organization has ADMIN enabled (the platform does not guess the default; epochStart and votesFrom are then null too and ValidatorVotes.tallyKnown is false)
+          example: 30000
+        epochStart:
+          type: integer
+          format: int64
+          nullable: true
+          description: First block of the current epoch (height − height % epochLength)
+          example: 1260000
+        votesFrom:
+          type: integer
+          format: int64
+          nullable: true
+          description: >
+            The block from which the tally is complete. Equal to epochStart = every vote in this epoch has been seen; greater than epochStart = the platform is still backfilling in the background after a restart,
+            or the source node has no earlier block headers (a node that joined via checkpoint sync), and votes written before it are not in voters
+          example: 1260000
+        blockPeriodSeconds:
+          type: number
+          format: float
+          nullable: true
+          description: >
+            Seconds per block when there are transactions - genesis blockperiodseconds (from admin_nodeInfo of any node in this organization with ADMIN enabled); when unavailable, the median interval of blocks with transactions
+            among the last 36 blocks. null when there is no source node
+          example: 2
+        emptyBlockPeriodSeconds:
+          type: number
+          format: float
+          nullable: true
+          description: >
+            Seconds per block when there are no transactions (the QBFT / IBFT2 empty block period; Besu does not report this setting, so it is the median interval of blocks with 0 transactions among the last 36 blocks).
+            Equals blockPeriodSeconds on chains without an empty block period, and also when there are no empty blocks to go by
+          example: 2
+        expectedBlockPeriodSeconds:
+          type: number
+          format: float
+          nullable: true
+          description: >
+            Expected seconds per block right now - blockPeriodSeconds when transactions are waiting in the pool and the latest block has transactions, otherwise emptyBlockPeriodSeconds (same as Besu's block production logic).
+            This is the baseline for "block production slowed", and the ChainSlow / ChainSlowSevere alerts use the same number
+          example: 2
+        genesisAt: { type: string, format: date-time, nullable: true, description: 'Timestamp of the genesis block (block 0); null when unavailable' }
+        evmVersion:
+          type: string
+          nullable: true
+          description: >
+            Latest hard fork active at the chain head (EVM version, e.g. London, Shanghai, Cancun, Prague), derived from the chain config in admin_nodeInfo;
+            Frontier when no forks are configured. null when no node in this organization has ADMIN enabled
+          example: Shanghai
+        roundChanges1h:
+          allOf: [{ $ref: '#/components/schemas/RoundChanges' }]
+          nullable: true
+          description: Round timeouts in the last hour (the validator whose turn it was did not produce and the next one took over); null when there is no source node
+        stability24h:
+          type: array
+          description: Block production per hour over the last 24 hours (24 slots, oldest to newest); the multipliers come from the current values of the ChainSlow / ChainSlowSevere alert rules
+          items: { $ref: '#/components/schemas/HourState' }
+        asOf: { $ref: '#/components/schemas/Timestamp' }
+        dataAgeSec:
+          type: number
+          nullable: true
+          description: Age in seconds, at response time, of the source node's data (computed server-side, unaffected by the browser clock); null when there is no source
+
+    ChainNode:
+      type: object
+      description: >
+        A node on the chain, one entry per address. Ordered by validators first, then this organization's nodes, then by the number of this organization's nodes connected to it (descending), then by address.
+        This organization's nodes are identified by what net_enode reports; validators of this organization that have not reported yet are listed as belonging to someone else
+      required: [address, isValidator, isOwn]
+      properties:
+        address: { type: string, description: '0x + lowercase' }
+        name: { type: string, nullable: true, description: 'Name given by this organization (peer-names; nodes.name for this organization''s nodes)' }
+        isValidator: { type: boolean, description: 'In the current validator set' }
+        isOwn: { type: boolean }
+        nodeId: { type: string, nullable: true, description: 'Platform id of this organization''s node' }
+        producing: { type: boolean, nullable: true, description: 'Validators only; same as ValidatorSetEntry.producing' }
+        missedTurns1000:
+          type: integer
+          nullable: true
+          description: Validators only - how many times in the last 1000 blocks it had the turn to propose but timed out and the next validator took over (the number of proposed=false entries in ValidatorSetEntry.turns); null when it has no turn history yet (same as producing)
+        lastProposed:
+          allOf: [{ $ref: '#/components/schemas/ProposedBlock' }]
+          nullable: true
+          description: Validators only - the last block it proposed among the blocks the platform caches (the last 3600 blocks); null if none
+        blocksBehind:
+          type: integer
+          format: int64
+          nullable: true
+          description: >
+            Blocks behind the chain head. For this organization's nodes, same as NodeSummary.blocksBehind; for other nodes, estimated from the admin_peers latestBlock seen in the same round
+            by the highest of this organization's nodes connected to it (±1 block, updated only when the peer broadcasts a new block). null when no node of this organization is connected to it, or none of those has ADMIN enabled
+
+    ProposedBlock:
+      type: object
+      required: [height, at]
+      properties:
+        height: { type: integer, format: int64 }
+        at: { type: string, format: date-time }
+
+    RoundChanges:
+      type: object
+      required: [total, byProposer]
+      properties:
+        total: { type: integer, description: 'Total round timeouts in the last hour' }
+        byProposer:
+          type: array
+          description: Grouped by the validator that should have proposed, most first
+          items: { $ref: '#/components/schemas/RoundChangeCount' }
+
+    RoundChangeCount:
+      type: object
+      required: [address, count]
+      properties:
+        address: { type: string }
+        name: { type: string, nullable: true, description: 'Name given by this organization (peer-names)' }
+        orgId: { type: string, nullable: true, description: 'Only for this organization''s validators' }
+        nodeId: { type: string, nullable: true, description: 'Only for this organization''s validators' }
+        count: { type: integer }
+
+    ValidatorVoteRequest:
+      type: object
+      required: [address, add]
+      properties:
+        address: { type: string, pattern: '^0x[0-9a-fA-F]{40}$' }
+        add: { type: boolean, description: 'true = vote to add; false = vote to remove' }
+
+    ValidatorVoteResult:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          items: { $ref: '#/components/schemas/ValidatorVoteNodeResult' }
+
+    ValidatorVoteNodeResult:
+      type: object
+      required: [nodeId, ok]
+      properties:
+        nodeId: { type: string }
+        ok: { type: boolean }
+        error: { type: string, nullable: true, description: 'English description of the failure (for developers and logs); the UI displays reason' }
+        reason:
+          allOf: [{ $ref: '#/components/schemas/ErrorReason' }]
+          nullable: true
+          description: Failure reason code (same as Error.reason; the UI translates it into the user's language)
+        params:
+          type: object
+          nullable: true
+          additionalProperties: { type: string }
+          description: Variable values in the reason message
+
+    ValidatorVoteRecord:
+      type: object
+      description: >
+        A finished validator vote (to add or remove address). There are only two outcomes - passed = reached a majority and the validator set changed (endedBlock is the block where the set changed);
+        expired = no majority by the epoch boundary (endedBlock is the boundary block), or every vote cast was cancelled by an opposite vote, or the voters were removed from the validator set (the count dropped to zero, votes 0).
+        A later vote for the same address and direction starts a new record
+      required: [address, add, result, firstVoteAt, endedAt, endedBlock, votes, needed, ballots]
+      properties:
+        address: { type: string, description: '0x + lowercase' }
+        add: { type: boolean }
+        result: { $ref: '#/components/schemas/ValidatorVoteOutcome' }
+        firstVoteAt: { type: string, format: date-time, description: 'Time the first vote was written into a block' }
+        endedAt: { type: string, format: date-time }
+        endedBlock: { type: integer, format: int64 }
+        votes: { type: integer, description: 'Number of votes counted when it ended' }
+        needed: { type: integer, description: 'Majority threshold at the time (validator count / 2 + 1)' }
+        ballots:
+          type: array
+          description: Every validator eligible to vote when it ended (sorted by address) and its vote; the earliest voter is the proposer
+          items: { $ref: '#/components/schemas/ValidatorBallot' }
+
+    ValidatorVoteOutcome:
+      type: string
+      enum: [passed, expired]
+      x-enum-varnames: [ValidatorVotePassed, ValidatorVoteExpired]
+
+    ValidatorBallot:
+      type: object
+      required: [address, votedAt, block]
+      properties:
+        address: { type: string }
+        votedAt: { type: string, format: date-time, nullable: true, description: 'Time the vote was written into a block; null if it did not vote' }
+        block: { type: integer, format: int64, nullable: true, description: 'Block the vote was written into; null if it did not vote' }
+        own: { type: boolean, description: 'A validator of this organization' }
+        name: { type: string, nullable: true }
+        withdrawnAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: This organization withdrew the vote; this is when the cancelling vote was written into a block. votedAt / block still refer to the original vote, which is not counted in votes
+
+    ValidatorVotes:
+      type: object
+      required: [validatorCount, needed, ownValidators, votes, tallyKnown]
+      properties:
+        tallyKnown:
+          type: boolean
+          description: >
+            Whether the counts can be trusted. false = the epoch length is unknown (no node in this organization has ADMIN enabled; see ChainInfo.epochLength), so voters come only from the recent blocks the platform keeps,
+            the epoch boundary is unknown, and counted votes may already be void. Proposals are still listed and can be joined, but do not use countedAt to compute counts or progress
+        validatorCount: { type: integer, description: 'Current number of validators on chain' }
+        needed: { type: integer, description: 'Votes needed to take effect (floor(validatorCount/2) + 1)' }
+        ownValidators:
+          type: array
+          description: This organization's validator nodes (those whose validator address is in the current set); votes are sent to these nodes
+          items: { type: string }
+        votes:
+          type: array
+          items: { $ref: '#/components/schemas/ValidatorVote' }
+
+    ValidatorVote:
+      type: object
+      description: A change under vote (target address + direction) not yet reflected in the validator set. Counted votes = the number of voters whose countedAt is not null; it takes effect on reaching needed
+      required: [address, add, voters]
+      properties:
+        address: { type: string }
+        add: { type: boolean }
+        voters:
+          type: array
+          description: >
+            Validators that cast this vote - those written into blocks this epoch (network-wide, counting only validators still in the set),
+            plus votes our own nodes have sent that are not yet in a block this epoch. Sorted by address
+          items: { $ref: '#/components/schemas/ValidatorVoter' }
+
+    ValidatorVoter:
+      type: object
+      required: [address]
+      properties:
+        address: { type: string, description: 'Validator address (0x + lowercase)' }
+        nodeId: { type: string, nullable: true, description: 'Only for this organization''s nodes' }
+        pending:
+          type: boolean
+          description: >
+            true = the vote is still in the pending list of this organization's node; false = another organization, or the node reported a pending list without this vote;
+            omitted = no snapshot from this organization's node (agent offline, etc.), so it is unknown.
+        countedAt:
+          type: integer
+          format: int64
+          nullable: true
+          description: Block number this vote was written into in the current epoch; null = sent by our own node but it has not had its turn to produce a block yet
+        countedAtTime:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp of the countedAt block; null until written into a block
+        withdrawing:
+          type: boolean
+          description: >
+            This organization's vote is being withdrawn - the vote is already in a block and the platform has sent an opposite vote from this node to cancel it; the count drops only once that is written into a block (this node's next block),
+            and the vote still counts until then. Omitted when not being withdrawn
+        withdrawnAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            This organization's vote has been withdrawn; this is when the cancelling vote was written into a block, and this node's vote no longer counts (countedAt is null, pending is false).
+            The voter is listed only while the same vote still has other counted votes; omitted when not withdrawn or not this organization's
+
+    AlertStatus:
+      type: string
+      enum: [firing, resolved]
+      x-enum-varnames: [AlertStatusFiring, AlertStatusResolved] # pin the constant names, as above
+
+    AlertList:
+      type: object
+      description: >
+        Alert list. When the monitoring source (Prometheus or Alertmanager) is down, the alerts in the database are still returned with monitoringAvailable false;
+        no new firing or resolution arrives during that time, so alerts stop updating.
+      required: [alerts, monitoringAvailable]
+      properties:
+        alerts:
+          type: array
+          items: { $ref: '#/components/schemas/Alert' }
+        monitoringAvailable:
+          type: boolean
+          description: Prometheus is reachable, and so is Alertmanager when configured. false = alerts are not updated in real time
+
+    Alert:
+      type: object
+      description: >
+        An alert fired by a Prometheus/Alertmanager rule. nodeId is present only on node-level alerts;
+        it is null for platform event alerts (certificate expiry, failed votes).
+      required: [id, fingerprint, alertname, severity, status, labels, annotations, startsAt, readFire, readResolve]
+      properties:
+        id: { type: string, description: 'Identifier assigned by the platform (the same from firing to resolution of one alert); send it when marking as read. Its format is not guaranteed' }
+        fingerprint: { type: string, description: 'Stable deduplication key from Alertmanager' }
+        alertname: { type: string, example: NodeOffline }
+        nodeId: { type: string, nullable: true }
+        severity: { type: string, enum: [critical, warning] }
+        status: { $ref: '#/components/schemas/AlertStatus' }
+        labels: { type: object, additionalProperties: { type: string } }
+        annotations:
+          type: object
+          additionalProperties: { type: string }
+          description: summary, description, rule_name; threshold rules also have value (the value when it fired, the raw Prometheus {{ $value }}, e.g. "86.2")
+        startsAt: { $ref: '#/components/schemas/Timestamp' }
+        endsAt:
+          allOf: [{ $ref: '#/components/schemas/Timestamp' }]
+          nullable: true
+        readFire: { type: boolean, description: 'The current user has read the firing entry' }
+        readResolve: { type: boolean, description: 'The current user has read the resolved entry (false while still firing; becomes unread again on resolution)' }
+
+    AlertReadRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          items: { type: string }
+          description: Alert.id
+
+    # ── Node enrollment (join token) ──────
+    JoinTokenStatus:
+      type: string
+      enum: [pending, used, expired, revoked]
+      # x-enum-varnames pins the Go constant names. Without it, adding or removing a value like "pending" in another schema changes oapi-codegen's
+      # name-collision detection, making these constants drift between JoinTokenStatusPending and Pending and breaking callers.
+      x-enum-varnames: [JoinTokenStatusPending, JoinTokenStatusUsed, JoinTokenStatusExpired, JoinTokenStatusRevoked]
+      description: pending = not yet used; used = the agent has joined (single use); expired = not used in time; revoked = revoked after issuance
+
+    JoinTokenTtl:
+      type: string
+      enum: ['15m', '1h', '24h']
+      description: Token validity period (default 1h)
+
+    JoinTokenCreateRequest:
+      type: object
+      required: [nodeId]
+      properties:
+        nodeId:
+          type: string
+          pattern: '^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$'
+          description: >
+            Node id the node gets after joining with this token (bound at creation). agent join sends only the token; the platform takes the node id from the token
+            and writes it into the certificate CN. A new node requires that the id does not exist yet; re-enroll requires that it is already registered. Uppercase is converted to lowercase before storing.
+          example: node-a3
+        rpcPort:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          default: 8545
+          description: The node's local JSON-RPC port (Besu rpc-http-port). The platform forwards to 127.0.0.1:<this port> through the agent tunnel. Written only when a new node joins; re-enroll does not change it (use PUT /nodes/{id}/ports to change ports)
+        metricsPort:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          default: 9545
+          description: The node's local metrics port (Besu metrics-port). Prometheus scrapes 127.0.0.1:<this port>/metrics through the agent tunnel. Written only when a new node joins; re-enroll does not change it
+        nodeName:
+          type: string
+          nullable: true
+          maxLength: 64
+          description: Display name of the node after joining (optional); written when a new node joins, unchanged by re-enroll
+          example: Taipei primary validator
+        allowedSources:
+          type: array
+          items: { type: string }
+          description: Source IP allowlist (optional). IPs or CIDRs; if set, agent join / re-enroll is rejected when the source IP is not in the list. Empty means no restriction
+          example: ['10.0.0.31']
+        ttl:
+          allOf: [{ $ref: '#/components/schemas/JoinTokenTtl' }]
+          default: '1h'
+    JoinToken:
+      type: object
+      description: Join token list item. Contains no secret; the full token appears only once, in the creation response (JoinTokenCreated).
+      required: [id, nodeId, status, createdAt, expiresAt, allowedSources]
+      properties:
+        id: { type: string, example: jt-01 }
+        nodeName: { type: string, nullable: true, description: 'Display name of the node after joining', example: Taipei primary validator }
+        allowedSources:
+          type: array
+          items: { type: string }
+          description: Source IP allowlist (normalized to CIDR); empty array = no restriction
+          example: ['10.0.0.31/32']
+        status: { $ref: '#/components/schemas/JoinTokenStatus' }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+        expiresAt: { $ref: '#/components/schemas/Timestamp' }
+        nodeId:
+          type: string
+          description: Node id bound to this token (set at creation)
+          example: node-a1
+
+    JoinTokenCreated:
+      allOf:
+        - $ref: '#/components/schemas/JoinToken'
+        - type: object
+          required: [token, platformAddr]
+          properties:
+            token:
+              type: string
+              description: The full join token (includes the root CA digest to prevent MITM). Returned only once, in this response; the platform does not keep the plaintext.
+              example: 'BSOS-1-sha256:9f2a…c41e-7kx3m…q8wz'
+            platformAddr:
+              type: string
+              description: Platform agent mTLS address (host:port); the frontend uses it for --platform in the install.sh command
+              example: 'platform.org-a:8443'
+
+    PeerInfo:
+      type: object
+      description: An entry from a node's admin_peers. Only two things are proven - the peer holds this public key (the handshake succeeded), and whether the address derived from it is an on-chain validator. The name is given by a user in this organization.
+      required: [address, inbound]
+      properties:
+        pubkey: { type: string, nullable: true, description: 'Node public key (128 lowercase hex characters); omitted without monitor:view (cross-organization forwarding)' }
+        address: { type: string, description: 'Address derived from the public key (0x + lowercase); names are keyed by it' }
+        enode: { type: string, nullable: true, description: 'Enode reported by admin_peers - host is the remote IP of the connection and the port is the listening port the peer announces (the ephemeral port is in remoteAddress); omitted without monitor:view (cross-organization forwarding)' }
+        remoteAddress: { type: string, nullable: true, description: 'Actual remote address of the connection (ip:port); omitted without monitor:view (cross-organization forwarding)' }
+        inbound: { type: boolean, description: 'true = the peer initiated the connection' }
+        nodeId: { type: string, nullable: true, description: 'Node id when it is a node of this organization (set = this organization)' }
+        validatorAddress: { type: string, nullable: true, description: 'Its address when it is an on-chain validator (set = validator; also present for this organization''s nodes)' }
+        name: { type: string, nullable: true, description: 'Name given by a user in this organization' }
+
+    ManualPeer:
+      type: object
+      required: [pubkey, address, enode, createdAt]
+      properties:
+        pubkey: { type: string, description: 'Public key of the enode (lowercase); the list is keyed by it' }
+        address: { type: string, description: 'Address derived from the public key (0x + lowercase); peer names are keyed by it (PUT /peer-names/{address})' }
+        enode: { type: string, description: 'Enode pushed to nodes (enode://<pubkey>@<IP>:<port>)' }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+
+    ManualPeerCreateRequest:
+      type: object
+      required: [enode]
+      properties:
+        enode: { type: string, description: 'enode://<128-hex pubkey>@<IP>:<port>; the host must be an IP (Besu does not accept host names)' }
+
+    PeerMode:
+      type: string
+      enum: ['off', shared, custom]
+      x-enum-varnames: [PeerModeOff, PeerModeShared, PeerModeCustom]
+      description: >
+        Summary of a node's extra peers, derived from the switch and the directly added peers - shared = uses the shared list; custom = does not use it but has directly added peers;
+        off = neither (the platform adds no peers to this node). The platform never touches static-nodes.json or bootnodes
+
+    PeerSharedRequest:
+      type: object
+      required: [useShared]
+      properties:
+        useShared: { type: boolean }
+
+    NodeCustomPeers:
+      type: object
+      description: 'What this node gets pushed = (useShared ? the shared list minus itself and quarantined nodes : empty) ∪ directly added peers (for the same public key, the shared list entry wins)'
+      required: [useShared, peers]
+      properties:
+        useShared: { type: boolean, description: 'Whether this node uses the shared list; off by default' }
+        peers:
+          type: array
+          description: Peers added directly to this node (regardless of the switch)
+          items: { $ref: '#/components/schemas/CustomPeer' }
+
+    CustomPeer:
+      type: object
+      required: [pubkey, enode, quarantined]
+      properties:
+        pubkey: { type: string }
+        enode: { type: string, description: 'Enode pushed to this node (the value stored in the list)' }
+        name: { type: string, nullable: true, description: 'Display name - the node name for this organization''s nodes, otherwise from peer_names' }
+        nodeId: { type: string, nullable: true, description: 'Which node of this organization the public key belongs to' }
+        quarantined: { type: boolean, description: 'The public key belongs to a quarantined node of this organization; not pushed this round' }
+
+    NodeTxPool:
+      type: object
+      description: |
+        Snapshot of a node's transaction pool. When syncing is true, Besu has disabled the pool (RPC returns only empty results) and all other fields are empty.
+        The counts and oldest time in totals cover the whole pool; pending / queued cover only accounts in senders whose nextNonce was fetched (not the whole pool when truncated).
+      required: [asOf, syncing, localCount, remoteCount, totals, truncated, senders]
+      properties:
+        asOf: { type: string, format: date-time }
+        syncing: { type: boolean, description: 'The node is syncing; Besu disables the transaction pool meanwhile' }
+        maxSize:
+          type: integer
+          nullable: true
+          description: Transaction count limit of the pool (tx-pool-max-size of a sequenced pool); null for layered pools, which are limited by size rather than count
+        localCount: { type: integer, description: 'Transactions sent directly to this node''s RPC' }
+        remoteCount: { type: integer, description: 'Transactions forwarded from other nodes' }
+        totals: { $ref: '#/components/schemas/TxPoolTotals' }
+        truncated: { type: boolean, description: 'More than 200 accounts (senders lists only the 200 with the most transactions), or more than 500 transactions in the pool (nonces cannot be fetched for the excess, so their accounts may look like they have nonce gaps). truncated true with empty senders means the pool is too large and the list exceeds the agent channel''s response limit, so only counts are returned (totals and oldestAddedAt are unknown); querying a single address with from still works' }
+        senders:
+          type: array
+          items: { $ref: '#/components/schemas/TxPoolSender' }
+        rejected:
+          type: array
+          nullable: true
+          description: Rejections in the last hour by reason (Besu TransactionInvalidReason), most first; null when the platform has no Prometheus, the query to it failed, or the node is syncing
+          items: { $ref: '#/components/schemas/TxPoolRejected' }
+
+    TxPoolTotals:
+      type: object
+      required: [pending, queued]
+      properties:
+        pending: { type: integer, description: 'Transactions contiguous from the account''s on-chain nonce that can be included directly' }
+        queued: { type: integer, description: 'Transactions stuck behind a nonce gap' }
+        oldestAddedAt: { type: string, format: date-time, nullable: true, description: 'Time the oldest transaction entered the pool (node local clock); null when the pool is empty' }
+
+    TxPoolSender:
+      type: object
+      required: [address, nextNonce, txs]
+      properties:
+        address: { type: string, description: 'Sender address (lowercase)' }
+        nextNonce: { type: integer, format: int64, description: 'Next nonce expected on chain (eth_getTransactionCount latest)' }
+        txs:
+          type: array
+          description: Ascending by nonce
+          items: { $ref: '#/components/schemas/TxPoolTx' }
+
+    TxPoolTx:
+      type: object
+      required: [hash, nonce, addedAt, local]
+      properties:
+        hash: { type: string }
+        nonce: { type: integer, format: int64 }
+        to: { type: string, nullable: true, description: 'Recipient address; null for contract deployment' }
+        addedAt: { type: string, format: date-time, description: 'Time it entered this node''s pool (node local clock)' }
+        local: { type: boolean, description: 'true = sent directly to this node''s RPC; false = forwarded from another node' }
+
+    TxPoolRejected:
+      type: object
+      required: [reason, count]
+      properties:
+        reason: { type: string, description: 'Besu''s TransactionInvalidReason, e.g. NONCE_TOO_LOW, GAS_PRICE_TOO_LOW, TX_SENDER_NOT_AUTHORIZED' }
+        count: { type: integer }
+
+    NodePeers:
+      type: object
+      required: [reported, peers]
+      properties:
+        reported: { type: boolean, description: 'false = this node''s admin_peers could not be read this round (ADMIN not enabled or node offline), so empty peers does not mean no connections' }
+        peers:
+          type: array
+          items: { $ref: '#/components/schemas/PeerInfo' }
+
+    SharedPeers:
+      type: object
+      required: [peers, candidates, nodes]
+      properties:
+        peers:
+          type: array
+          description: Every entry of the shared list
+          items: { $ref: '#/components/schemas/SharedPeer' }
+        nodes:
+          type: array
+          description: Usage for each node of this organization (sorted by id)
+          items: { $ref: '#/components/schemas/SharedPeerNode' }
+        candidates:
+          type: array
+          description: Peers connected to this organization's nodes that are neither in the shared list nor nodes of this organization; they can be added to the shared list. Sorted by how many of this organization's nodes see them, most first
+          items: { $ref: '#/components/schemas/PeerCandidate' }
+
+    SharedPeerNode:
+      type: object
+      required: [id, useShared, additions, quarantined]
+      properties:
+        id: { type: string }
+        useShared: { type: boolean, description: 'Whether this node uses the shared list' }
+        additions: { type: integer, description: 'Number of peers added directly to this node' }
+        quarantined: { type: boolean }
+        missing:
+          type: integer
+          nullable: true
+          description: How many of the peers to push to this node (shared list + directly added) it is currently not connected to; null when quarantined or it did not report admin_peers this round
+
+    SharedPeer:
+      type: object
+      description: An entry of the shared list
+      required: [pubkey, enode, address]
+      properties:
+        pubkey: { type: string }
+        enode: { type: string, description: 'Enode that is pushed' }
+        address: { type: string, description: 'Address derived from the public key (0x + lowercase); names are keyed by it' }
+        nodeId: { type: string, nullable: true, description: 'Which node of this organization the public key belongs to' }
+        name: { type: string, nullable: true, description: 'Display name - the node name for this organization''s nodes, otherwise from peer_names' }
+
+    PeerCandidate:
+      type: object
+      required: [pubkey, address, enode]
+      properties:
+        pubkey: { type: string }
+        address: { type: string, description: 'Address derived from the public key (0x + lowercase)' }
+        enode: { type: string, description: 'Enode reported by admin_peers (taken from one of them when several nodes see it)' }
+        validatorAddress: { type: string, nullable: true, description: 'Its address when it is an on-chain validator (set = validator)' }
+        name: { type: string, nullable: true, description: 'Name from peer_names' }
+
+    PeerNameRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 64 }
+
+    RpcUser:
+      type: object
+      description: An RPC access identity is a named set of method permissions, one per organization. The platform stores no password; tokens are issued via /token and JWTs are stateless.
+      required: [id, username, permissions, createdAt]
+      properties:
+        id: { type: string, description: 'User id; a user recreated under the same name gets a new id' }
+        username: { type: string, description: 'RPC access identity name, unique within the organization (the token sub)', example: dapp-web }
+        permissions:
+          type: array
+          description: Besu permission strings (namespace:* or namespace:method); copied as-is into the permissions claim when a token is issued
+          items: { type: string }
+          example: ['eth:blockNumber', 'eth:call', 'net:version']
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+
+    RpcUserCreate:
+      type: object
+      required: [username, permissions]
+      properties:
+        username:
+          type: string
+          description: Unique within the organization; only letters, digits, - and _; the bsos- prefix is reserved for the platform
+          example: dapp-web
+        permissions:
+          type: array
+          description: Permission strings picked from the method catalog (namespace:* or namespace:method); the backend validates them against the catalog as an allowlist
+          minItems: 1
+          items: { type: string }
+          example: ['eth:blockNumber', 'eth:sendRawTransaction', 'net:version']
+
+    RpcTokenRequest:
+      type: object
+      description: Give exactly one of ttl and expiresAt.
+      properties:
+        ttl:
+          type: string
+          enum: [1h, 24h, 7d, 30d, 365d]
+          description: Token lifetime. There is no "forever" because Besu requires exp; a leaked long-lived token works until it expires, so the UI defaults to 7d
+          x-enum-varnames: [RpcTokenTtl1h, RpcTokenTtl24h, RpcTokenTtl7d, RpcTokenTtl30d, RpcTokenTtl365d]
+        expiresAt:
+          allOf: [{ $ref: '#/components/schemas/Timestamp' }]
+          description: Explicit expiry time; must be in the future and at most 1 year ahead
+        label:
+          type: string
+          maxLength: 64
+          description: Purpose (optional), e.g. "production"; at most 64 characters after trimming whitespace, and empty means none
+
+    RpcTokenIssued:
+      type: object
+      required: [token, tokenId, label, expiresAt, permissions]
+      properties:
+        tokenId:
+          type: string
+          description: Id generated for this issuance (tk_ + 12 hex characters), written into the JWT jti; the history stores the same value
+          example: tk_7f3a9c2be104
+        label: { type: string, nullable: true, description: 'Purpose given at issuance; null if none' }
+        token:
+          type: string
+          description: JWT (RS256). Appears only once, in this response; the platform does not keep it, so issue a new one if it is lost
+        expiresAt: { $ref: '#/components/schemas/Timestamp' }
+        permissions:
+          type: array
+          description: Permissions actually carried by this token (the user's permissions at issuance)
+          items: { type: string }
+
+    RpcUserEvent:
+      type: object
+      description: An activity record of an RPC access identity.
+      required: [id, kind, at, actor, permissions]
+      properties:
+        id: { type: integer, format: int64 }
+        kind:
+          type: string
+          enum: [created, token_issued]
+          x-enum-varnames: [RpcUserEventCreated, RpcUserEventTokenIssued]
+        at: { $ref: '#/components/schemas/Timestamp' }
+        actor: { type: string, description: 'Who performed it (login account); empty string when unknown' }
+        permissions:
+          type: array
+          description: created = permissions at creation; token_issued = permissions carried by the token
+          items: { type: string }
+        expiresAt:
+          allOf: [{ $ref: '#/components/schemas/Timestamp' }]
+          description: token_issued only - the token's expiry
+        tokenId: { type: string, nullable: true, description: 'token_issued only - the token id (JWT jti)' }
+        label: { type: string, nullable: true, description: 'token_issued only - the purpose given at issuance' }
+
+    AgentRuntime:
+      type: string
+      enum: [systemd, docker]
+      description: How the agent runs on its host. docker = inside a container (the install script's Docker mode); systemd = directly on the host
+      x-enum-varnames: [AgentRuntimeSystemd, AgentRuntimeDocker]
+
+    AgentStatus:
+      type: object
+      description: >
+        The agent's GET /agent-status (tunnel only, not a platform API). Every round the platform asks with the P2P port from this node's enode.
+      required: [version, p2pOpen]
+      properties:
+        version: { type: string, description: 'Agent build version', example: '2.0.0' }
+        runtime: { $ref: '#/components/schemas/AgentRuntime' }
+        p2pOpen:
+          type: boolean
+          nullable: true
+          description: Whether anything listens on the given P2P port on 127.0.0.1 or any interface IP; null when no port was given or the port is not in ALLOW_PORTS
+
+    NodeLogs:
+      type: object
+      description: A slice of the agent's log buffer. seq increases monotonically within an epoch; after an agent restart the epoch changes and seq starts again from 1.
+      required: [epoch, connected, lines, next, skipped]
+      properties:
+        epoch:
+          type: integer
+          format: int64
+          description: Id of this agent run; if it differs from the last one received, the agent has restarted and the frontend clears and refetches (without after)
+        connected:
+          type: boolean
+          description: Whether Besu is currently connected to the agent's log input
+        lines:
+          type: array
+          items: { $ref: '#/components/schemas/NodeLogLine' }
+        skipped:
+          type: integer
+          format: int64
+          description: >
+            Number of lines after after and before the first line of this batch that were evicted from the agent buffer and are lost (only the latest ~2 MB is kept);
+            0 = contiguous, nothing lost. The frontend uses it to mark the gap as "about N lines overwritten". Always 0 without after.
+        next:
+          type: integer
+          format: int64
+          description: The after to send on the next poll (the seq of the last line in this batch, or the given after when there are no new lines)
+
+    NodeLogLine:
+      type: object
+      required: [seq, text]
+      properties:
+        seq: { type: integer, format: int64 }
+        text: { type: string, description: 'The raw line (not parsed; anything beyond 64 KB is truncated)' }
+
+    NodeLogBlocks:
+      type: object
+      description: >
+        Response of the agent's GET /logblocks?after=<epoch>.<seq> (tunnel only, not a platform API; the Enterprise platform pulls it for long-term retention).
+        Ascending by (epoch, seqLast), with a cap on the total size per call; more = true means there is more and the platform pulls again right away.
+      required: [agentNow, more, blocks]
+      properties:
+        agentNow:
+          type: string
+          format: date-time
+          description: The agent's clock at response time (the platform uses it to compute clock skew)
+        more: { type: boolean }
+        blocks:
+          type: array
+          items: { $ref: '#/components/schemas/NodeLogBlock' }
+
+    NodeLogBlock:
+      type: object
+      description: >
+        A sealed log block - zstd-compressed JSON Lines, each line {"s": sequence, "t": receive time, "l": raw text} or {"s", "t", "mark": {...}}.
+        Sequence numbers are contiguous within an epoch; epoch is a persistent counter the agent increments on every start.
+      required: [epoch, seqFirst, seqLast, recvFirst, recvLast, sha256, data]
+      properties:
+        epoch: { type: integer, format: int64 }
+        seqFirst: { type: integer, format: int64 }
+        seqLast: { type: integer, format: int64 }
+        recvFirst: { type: string, format: date-time }
+        recvLast: { type: string, format: date-time }
+        sha256: { type: string, description: 'SHA-256 of the compressed bytes (hex)' }
+        data: { type: string, format: byte, description: 'zstd-compressed bytes (base64)' }
+
+    NodeCapabilities:
+      type: object
+      description: >
+        Whether the prerequisites of each platform feature layer are met. Agent connected = node online with host metrics; RPC connected = chain state, identity, voting,
+        peer pushing, account allowlist and log level; metrics connected = time-series charts and chain alerts.
+      required: [agent, rpcReachable, rpcUnauthorized, missingRpcApis, allowlistEnabled, metricsReachable, logsConnected]
+      properties:
+        agent:
+          type: boolean
+          description: The agent is currently connected to the platform
+        rpcReachable:
+          type: boolean
+          nullable: true
+          description: >
+            The platform can reach the node RPC through the agent (127.0.0.1:<rpcPort>); null = agent offline, unknown.
+            When false, check rpcUnauthorized to tell rejection from no response (Besu not running, RPC disabled or not listening on loopback, or a port different from the platform's record).
+        rpcUnauthorized:
+          type: boolean
+          description: The node returned 401 - the node is not configured with this platform's RPC public key, or the clocks differ too much
+        missingRpcApis:
+          type: array
+          items: { type: string }
+          description: >
+            RPC namespaces the platform uses but the node has not enabled (NET / ADMIN / TXPOOL / PERM; IBFT/QBFT when neither consensus namespace responds).
+            NET and IBFT/QBFT are required; ADMIN, TXPOOL and PERM are optional, and leaving them off only loses the matching features, which is not an error.
+            Empty array when RPC is unreachable.
+          example: [PERM]
+        allowlistEnabled:
+          type: boolean
+          nullable: true
+          description: >
+            Whether the node has the account allowlist file enabled (permissions-accounts-config-file-enabled).
+            null = unknown (RPC unreachable, or the PERM namespace is not enabled; see missingRpcApis).
+        metricsReachable:
+          type: boolean
+          nullable: true
+          description: Whether the platform's Prometheus last scraped this node's Besu metrics successfully; null = not scraped yet or the platform has no Prometheus
+        logsConnected:
+          type: boolean
+          nullable: true
+          description: >
+            Whether Besu is currently sending logs to the agent; null = the platform could not ask this round (agent offline, or the agent did not answer the log-status request).
+            Logs are optional - false usually means they are not configured (Besu has no LOG4J_CONFIGURATION_FILE), but the address in the config file may also differ from where the agent listens.
+        agentVersion:
+          type: string
+          nullable: true
+          description: Build version reported by this agent (same format as agentVersion in GET /platform/agent-bundle); null when the agent is offline or did not report this round
+          example: '2.0.0'
+        agentRuntime:
+          allOf: [{ $ref: '#/components/schemas/AgentRuntime' }]
+          nullable: true
+          description: How this agent runs, as it last reported it (kept while the agent is offline, which is when a re-join is needed); null when it has never reported it
+
+    BesuRunning:
+      type: boolean
+      nullable: true
+      description: >
+        Whether Besu is running. true = RPC is reachable, or the agent detects a listener on the P2P port from this node's enode;
+        false = neither works and a listener was seen on that port before (when status is rpc_unreachable, the UI shows "Offline (Besu stopped)");
+        null = agent offline, port not known yet, or no listener ever seen on that port. Included by cross-organization endpoints (same as status)
+
+    RpcAuthEnabled:
+      type: boolean
+      nullable: true
+      description: Whether the node RPC has authentication enabled (the platform probes the node RPC through the agent tunnel with a call without a token - 401 = enabled, 200 = disabled; every round while disabled, less often once enabled); null when unknown. Authentication is managed by the node operator; the platform only displays it and does not enforce it
+
+    RpcPublicKey:
+      type: object
+      required: [algorithm, publicKeyPem, sha256]
+      properties:
+        algorithm: { type: string, example: RS256, description: 'Value for Besu''s --rpc-http-authentication-jwt-algorithm' }
+        publicKeyPem: { type: string, description: 'PEM (PUBLIC KEY); save it to a file as-is for Besu' }
+        sha256: { type: string, description: 'SHA-256 of the public key DER (hex), for verifying on both sides' }
+
+    AgentBundleInfo:
+      type: object
+      required: [installShSha256]
+      properties:
+        installShSha256: { type: string, description: 'SHA-256 of the install.sh served by the platform (hex)' }
+        agentVersion: { type: string, nullable: true, description: 'Agent version (.version in AGENT_BINARY_DIR); null when absent' }
+        bundle:
+          allOf: [{ $ref: '#/components/schemas/AgentBundle' }]
+          nullable: true
+          description: Offline bundle; null when the platform has no agent binaries (AGENT_BINARY_DIR unset or empty)
+
+    AgentBundle:
+      type: object
+      required: [file, sha256, arches]
+      properties:
+        file: { type: string, example: besu-agent-2.0.0-linux.tar.gz }
+        sha256: { type: string }
+        arches:
+          type: array
+          description: Architectures of the agent binaries in the bundle
+          items: { type: string, enum: [amd64, arm64] }
+
+    RpcMethodCatalog:
+      type: array
+      description: Besu RPC method catalog (maintained by the platform; source for the checkbox list and the backend's permission-validation allowlist; follows the Besu version).
+      items: { $ref: '#/components/schemas/RpcNamespaceCatalog' }
+
+    RpcNamespaceCatalog:
+      type: object
+      description: A Besu namespace and its selectable methods.
+      required: [namespace, description, methods]
+      properties:
+        namespace: { type: string, description: 'Besu namespace (e.g. eth/net/web3)', example: eth }
+        description: { type: string, description: 'Short description of the namespace' }
+        methods:
+          type: array
+          items: { $ref: '#/components/schemas/RpcCatalogMethod' }
+
+    RpcCatalogMethod:
+      type: object
+      description: A single method in the catalog (name without the namespace prefix).
+      required: [method, description]
+      properties:
+        method: { type: string, description: 'Method name (without the namespace prefix)', example: blockNumber }
+        description: { type: string, description: 'Short description of the method' }
+
+    # ── Errors ─────────────────────────────────────────────
+    ErrorReason:
+      type: string
+      description: >
+        Fixed error code (the UI translates it into the user's language); errors without a reason show message as before. The full list is the ErrorReason enum. Per-item failure reasons inside 200 responses (e.g. per-node results of the allowlist or votes, external organizations) use the same codes
+      enum: [field_required, field_not_allowed, field_format, field_type, body_not_json, body_decode_failed, content_type_json, param_format, encoded_slash, route_not_found, method_not_allowed, db_unavailable, login_required, password_change_required, permission_denied, not_logged_in, not_local_account, last_admin, user_not_found, bad_credentials, no_role, wrong_current_password, password_too_short, password_too_long, password_contains_username, password_common, password_unchanged, invalid_email, email_required_to_send, account_has_no_email, account_mail_not_configured, user_exists, cannot_disable_self, cannot_delete_self, cannot_reset_self, enode_scheme, enode_no_host, enode_pubkey_length, enode_pubkey_hex, enode_host_port, enode_host_not_ip, enode_host_unroutable, enode_port_range, enode_discport, peer_is_self, peer_in_shared_list, peer_list_full, peer_exists, peer_not_found, manual_peer_list_full, manual_peer_exists, manual_peer_not_found, node_not_own, policy_stale, allowlist_disabled, node_unreachable, allowlist_mismatch, allowlist_no_extras, already_validator, not_validator, vote_no_consensus, no_validator_nodes, node_not_found, log_level_failed, node_logs_failed, txpool_failed, txpool_api_disabled, name_required, peer_is_own_node, monitoring_not_configured, monitoring_down, threshold_out_of_range, clear_threshold_out_of_range, clear_threshold_wrong_side, threshold_rule_fields_required, preset_rule_fields_locked, chain_slow_fields_locked, chain_slow_threshold_min, rule_condition_fixed, rule_not_found, preset_rule_undeletable, smtp_password_required, webhook_name_required, webhook_url_invalid, telegram_fields_required, telegram_thread_id_invalid, slack_url_required, slack_url_invalid, smtp_test_failed, webhook_test_failed, telegram_test_failed, slack_test_failed, rpc_username_reserved, rpc_username_format, rpc_permission_format, rpc_permission_unknown_namespace, rpc_permission_unknown_method, rpc_user_exists, rpc_user_not_found, rpc_token_ttl_xor, rpc_token_expiry_past, rpc_token_expiry_too_far, allowed_source_invalid, allowed_sources_too_many, join_token_not_found, join_token_not_revocable, join_token_expired, join_token_used, join_token_revoked, join_source_not_allowed, join_node_exists, re_enroll_node_online, cert_issue_failed, body_required, field_schema_mismatch, body_schema_mismatch, cross_org_disabled, access_key_endpoint_required, access_key_endpoint_format, access_key_endpoint_port, access_key_not_found, access_key_already_revoked, access_key_inactive, access_key_revoked, access_key_malformed, access_key_own, external_org_exists, external_org_name_taken, remote_fingerprint_mismatch, remote_key_unauthorized, remote_key_expired, remote_bad_response, remote_forbidden, remote_unreachable, external_org_not_found, external_node_not_found, remote_bad_format, sso_ldap_settings_required, sso_oidc_settings_required, sso_connector_invalid, sso_redirect_url_required, sso_reenter_secret, sso_ldap_save_failed, sso_oidc_connect_failed, sso_ldap_test_failed, sso_oidc_test_failed, sso_lockout, role_mapping_group_required, role_mapping_not_found, oidc_not_enabled, oidc_flow_expired, oidc_state_mismatch, oidc_verify_failed, role_mapping_changed, time_range_order, time_range_too_long, cursor_invalid, alert_rule_apply_failed, alert_settings_save_failed, operation_failed, internal_error, audit_unavailable, node_rpc_no_response, node_rpc_unauthorized, node_rpc_http_status, node_rpc_bad_response, node_rpc_missing_result, node_rpc_error, conn_resolve_failed, conn_address_blocked, conn_no_address, smtp_handshake_failed, smtp_ehlo_failed, smtp_auth_unsupported, smtp_auth_login_required, smtp_auth_failed, webhook_test_url_invalid, tls_handshake_failed, telegram_token_format, telegram_unreachable, telegram_token_invalid, telegram_forbidden, telegram_chat_not_found, telegram_thread_not_found, telegram_http_status, slack_unreachable, slack_http_status, sso_ldap_unreachable, sso_ldap_starttls_failed, sso_ldap_bind_failed, allowlist_perm_unavailable, allowlist_file_disabled, allowlist_persist_failed, allowlist_read_failed, conn_dial_failed, smtp_starttls_unsupported, smtp_starttls_failed, smtp_auth_mech_unsupported, smtp_sender_rejected, smtp_recipient_rejected, smtp_data_failed, smtp_write_failed, smtp_not_accepted, external_org_internal, smtp_cert_untrusted, smtp_cert_not_in_ca, smtp_starttls_required, enode_pubkey_invalid]
+      x-enum-varnames: [ErrorReasonFieldRequired, ErrorReasonFieldNotAllowed, ErrorReasonFieldFormat, ErrorReasonFieldType, ErrorReasonBodyNotJson, ErrorReasonBodyDecodeFailed, ErrorReasonContentTypeJson, ErrorReasonParamFormat, ErrorReasonEncodedSlash, ErrorReasonRouteNotFound, ErrorReasonMethodNotAllowed, ErrorReasonDbUnavailable, ErrorReasonLoginRequired, ErrorReasonPasswordChangeRequired, ErrorReasonPermissionDenied, ErrorReasonNotLoggedIn, ErrorReasonNotLocalAccount, ErrorReasonLastAdmin, ErrorReasonUserNotFound, ErrorReasonBadCredentials, ErrorReasonNoRole, ErrorReasonWrongCurrentPassword, ErrorReasonPasswordTooShort, ErrorReasonPasswordTooLong, ErrorReasonPasswordContainsUsername, ErrorReasonPasswordCommon, ErrorReasonPasswordUnchanged, ErrorReasonInvalidEmail, ErrorReasonEmailRequiredToSend, ErrorReasonAccountHasNoEmail, ErrorReasonAccountMailNotConfigured, ErrorReasonUserExists, ErrorReasonCannotDisableSelf, ErrorReasonCannotDeleteSelf, ErrorReasonCannotResetSelf, ErrorReasonEnodeScheme, ErrorReasonEnodeNoHost, ErrorReasonEnodePubkeyLength, ErrorReasonEnodePubkeyHex, ErrorReasonEnodeHostPort, ErrorReasonEnodeHostNotIp, ErrorReasonEnodeHostUnroutable, ErrorReasonEnodePortRange, ErrorReasonEnodeDiscport, ErrorReasonPeerIsSelf, ErrorReasonPeerInSharedList, ErrorReasonPeerListFull, ErrorReasonPeerExists, ErrorReasonPeerNotFound, ErrorReasonManualPeerListFull, ErrorReasonManualPeerExists, ErrorReasonManualPeerNotFound, ErrorReasonNodeNotOwn, ErrorReasonPolicyStale, ErrorReasonAllowlistDisabled, ErrorReasonNodeUnreachable, ErrorReasonAllowlistMismatch, ErrorReasonAllowlistNoExtras, ErrorReasonAlreadyValidator, ErrorReasonNotValidator, ErrorReasonVoteNoConsensus, ErrorReasonNoValidatorNodes, ErrorReasonNodeNotFound, ErrorReasonLogLevelFailed, ErrorReasonNodeLogsFailed, ErrorReasonTxpoolFailed, ErrorReasonTxpoolApiDisabled, ErrorReasonNameRequired, ErrorReasonPeerIsOwnNode, ErrorReasonMonitoringNotConfigured, ErrorReasonMonitoringDown, ErrorReasonThresholdOutOfRange, ErrorReasonClearThresholdOutOfRange, ErrorReasonClearThresholdWrongSide, ErrorReasonThresholdRuleFieldsRequired, ErrorReasonPresetRuleFieldsLocked, ErrorReasonChainSlowFieldsLocked, ErrorReasonChainSlowThresholdMin, ErrorReasonRuleConditionFixed, ErrorReasonRuleNotFound, ErrorReasonPresetRuleUndeletable, ErrorReasonSmtpPasswordRequired, ErrorReasonWebhookNameRequired, ErrorReasonWebhookUrlInvalid, ErrorReasonTelegramFieldsRequired, ErrorReasonTelegramThreadIdInvalid, ErrorReasonSlackUrlRequired, ErrorReasonSlackUrlInvalid, ErrorReasonSmtpTestFailed, ErrorReasonWebhookTestFailed, ErrorReasonTelegramTestFailed, ErrorReasonSlackTestFailed, ErrorReasonRpcUsernameReserved, ErrorReasonRpcUsernameFormat, ErrorReasonRpcPermissionFormat, ErrorReasonRpcPermissionUnknownNamespace, ErrorReasonRpcPermissionUnknownMethod, ErrorReasonRpcUserExists, ErrorReasonRpcUserNotFound, ErrorReasonRpcTokenTtlXor, ErrorReasonRpcTokenExpiryPast, ErrorReasonRpcTokenExpiryTooFar, ErrorReasonAllowedSourceInvalid, ErrorReasonAllowedSourcesTooMany, ErrorReasonJoinTokenNotFound, ErrorReasonJoinTokenNotRevocable, ErrorReasonJoinTokenExpired, ErrorReasonJoinTokenUsed, ErrorReasonJoinTokenRevoked, ErrorReasonJoinSourceNotAllowed, ErrorReasonJoinNodeExists, ErrorReasonReEnrollNodeOnline, ErrorReasonCertIssueFailed, ErrorReasonBodyRequired, ErrorReasonFieldSchemaMismatch, ErrorReasonBodySchemaMismatch, ErrorReasonCrossOrgDisabled, ErrorReasonAccessKeyEndpointRequired, ErrorReasonAccessKeyEndpointFormat, ErrorReasonAccessKeyEndpointPort, ErrorReasonAccessKeyNotFound, ErrorReasonAccessKeyAlreadyRevoked, ErrorReasonAccessKeyInactive, ErrorReasonAccessKeyRevoked, ErrorReasonAccessKeyMalformed, ErrorReasonAccessKeyOwn, ErrorReasonExternalOrgExists, ErrorReasonExternalOrgNameTaken, ErrorReasonRemoteFingerprintMismatch, ErrorReasonRemoteKeyUnauthorized, ErrorReasonRemoteKeyExpired, ErrorReasonRemoteBadResponse, ErrorReasonRemoteForbidden, ErrorReasonRemoteUnreachable, ErrorReasonExternalOrgNotFound, ErrorReasonExternalNodeNotFound, ErrorReasonRemoteBadFormat, ErrorReasonSsoLdapSettingsRequired, ErrorReasonSsoOidcSettingsRequired, ErrorReasonSsoConnectorInvalid, ErrorReasonSsoRedirectUrlRequired, ErrorReasonSsoReenterSecret, ErrorReasonSsoLdapSaveFailed, ErrorReasonSsoOidcConnectFailed, ErrorReasonSsoLdapTestFailed, ErrorReasonSsoOidcTestFailed, ErrorReasonSsoLockout, ErrorReasonRoleMappingGroupRequired, ErrorReasonRoleMappingNotFound, ErrorReasonOidcNotEnabled, ErrorReasonOidcFlowExpired, ErrorReasonOidcStateMismatch, ErrorReasonOidcVerifyFailed, ErrorReasonRoleMappingChanged, ErrorReasonTimeRangeOrder, ErrorReasonTimeRangeTooLong, ErrorReasonCursorInvalid, ErrorReasonAlertRuleApplyFailed, ErrorReasonAlertSettingsSaveFailed, ErrorReasonOperationFailed, ErrorReasonInternalError, ErrorReasonAuditUnavailable, ErrorReasonNodeRpcNoResponse, ErrorReasonNodeRpcUnauthorized, ErrorReasonNodeRpcHttpStatus, ErrorReasonNodeRpcBadResponse, ErrorReasonNodeRpcMissingResult, ErrorReasonNodeRpcError, ErrorReasonConnResolveFailed, ErrorReasonConnAddressBlocked, ErrorReasonConnNoAddress, ErrorReasonSmtpHandshakeFailed, ErrorReasonSmtpEhloFailed, ErrorReasonSmtpAuthUnsupported, ErrorReasonSmtpAuthLoginRequired, ErrorReasonSmtpAuthFailed, ErrorReasonWebhookTestUrlInvalid, ErrorReasonTlsHandshakeFailed, ErrorReasonTelegramTokenFormat, ErrorReasonTelegramUnreachable, ErrorReasonTelegramTokenInvalid, ErrorReasonTelegramForbidden, ErrorReasonTelegramChatNotFound, ErrorReasonTelegramThreadNotFound, ErrorReasonTelegramHttpStatus, ErrorReasonSlackUnreachable, ErrorReasonSlackHttpStatus, ErrorReasonSsoLdapUnreachable, ErrorReasonSsoLdapStarttlsFailed, ErrorReasonSsoLdapBindFailed, ErrorReasonAllowlistPermUnavailable, ErrorReasonAllowlistFileDisabled, ErrorReasonAllowlistPersistFailed, ErrorReasonAllowlistReadFailed, ErrorReasonConnDialFailed, ErrorReasonSmtpStarttlsUnsupported, ErrorReasonSmtpStarttlsFailed, ErrorReasonSmtpAuthMechUnsupported, ErrorReasonSmtpSenderRejected, ErrorReasonSmtpRecipientRejected, ErrorReasonSmtpDataFailed, ErrorReasonSmtpWriteFailed, ErrorReasonSmtpNotAccepted, ErrorReasonExternalOrgInternal, ErrorReasonSmtpCertUntrusted, ErrorReasonSmtpCertNotInCa, ErrorReasonSmtpStarttlsRequired, ErrorReasonEnodePubkeyInvalid]
+
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [not_found, forbidden, unauthorized, conflict, invalid, internal, password_change_required, monitoring_unavailable]
+          x-enum-varnames: [ErrorCodeNotFound, ErrorCodeForbidden, ErrorCodeUnauthorized, ErrorCodeConflict, ErrorCodeInvalid, ErrorCodeInternal, ErrorCodePasswordChangeRequired, ErrorCodeMonitoringUnavailable] # pin the constant names: oapi-codegen's default naming drifts as same-named enums are added or removed
+        message: { type: string, description: 'English, for developers and logs; the UI displays reason' }
+        reason: { $ref: '#/components/schemas/ErrorReason' }
+        params:
+          type: object
+          additionalProperties: { type: string }
+          description: Variable values in the reason message (e.g. field); only raw identifiers and numbers
+
+# Default - no scope means always rejected. Every operation must declare its own (see securitySchemes.bearerAuth).
+security:
+  - bearerAuth: []

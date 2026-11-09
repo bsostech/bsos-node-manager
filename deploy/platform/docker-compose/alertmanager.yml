@@ -1,0 +1,26 @@
+# BSOS platform Alertmanager config: basic reference template (platform receiver only, no SMTP or custom webhook).
+# docker-compose setup: this file is no longer bind-mounted into the container. At startup the platform renders an equivalent
+# config from alert_settings (or an extended one with Email/Webhook) into the alertmanager-config volume (see internal/alerting, docker-compose.yml).
+# This copy is kept as (1) a starting point for people who run their own Alertmanager without the platform's dynamic config, (2) local promtool/amtool syntax checks.
+
+route:
+  receiver: platform
+  group_by: ["alertname", "node"]
+  group_wait: 30s
+  group_interval: 30s
+  repeat_interval: 4h
+
+# When the platform goes down, up drops to 0 across the whole fleet; this rule suppresses that wave of false NodeOffline alerts.
+# No equal: the two sides share no labels, so listing any would suppress nothing.
+inhibit_rules:
+  - source_matchers: ['alertname="PlatformDown"']
+    target_matchers: ['alertname="NodeOffline"']
+
+receivers:
+  - name: platform
+    webhook_configs:
+      - url: http://server:8080/alerts/webhook
+        send_resolved: true
+        http_config:
+          authorization:
+            credentials_file: /sd-token/sd_token  # same SD_TOKEN as /sd/targets (written by server; alertmanager mounts the same volume read-only)

@@ -1,0 +1,80 @@
+# ── 🔴 Secrets: keys / certificates / env files (never upload) ──────────────
+# Embedded CA / agent mTLS material, CA_MASTER_KEY, DB passwords, slot PINs, etc.
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+.env
+.env.*
+*.env
+!*.env.example          # keep the templates (server.env.example / agent.env.example)
+!**/.env.example
+
+# Actual env files generated on the deploy host by up.sh (contain CA_MASTER_KEY)
+server.env
+ca_master_key
+agent.env
+sd_token
+
+# Agent certificate state directory after joining (agent.key/agent.crt/ca.pem)
+state/
+state-*/
+agent-state/
+**/state/
+**/state-*/
+
+# ── 🟡 Build output / dependencies ──────────────────────────────────────
+# Go
+bin/
+**/bin/
+*.test
+*.out
+coverage.*
+
+# Node / frontend
+node_modules/
+frontend/dist/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Deploy: agent binary mounted into the container (keep the directory placeholder)
+deploy/platform/docker-compose/agent-bin/*
+!deploy/platform/docker-compose/agent-bin/.gitkeep
+
+# Deploy output: compose .env (DEPLOY_MODE/domain/email), server cert/private key (secret, do not commit)
+deploy/platform/docker-compose/.env
+deploy/platform/docker-compose/certs/*
+!deploy/platform/docker-compose/certs/.gitkeep
+
+# ── 🟢 OS / editor / misc ──────────────────────────────────
+.DS_Store
+**/.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/
+*.swp
+*~
+# Claude Code: commit only the shared skills (for collaborators to pull; local settings settings.local.json / launch.json stay out)
+.claude/*
+!.claude/skills/
+# Local symlink (points at the ignored .agents/; committed it would be a broken link)
+.claude/skills/web-design-guidelines
+# Subdirectory .claude (vendored third-party plugin skills, 2.8MB, install yourself) stays out
+frontend/.claude/
+
+# Local AI tool state (session / memory / lock, all regenerable)
+.agents/
+.omc/
+.diagram-design
+skills-lock.json
+
+# Terraform state (may contain secrets, never commit)
+*.tfstate
+*.tfstate.*
+
+# Python bytecode
+__pycache__/
+*.pyc

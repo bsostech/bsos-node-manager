@@ -1,0 +1,49 @@
+# BSOS platform Prometheus: scrapes this org's node metrics as the real time series behind the monitoring charts.
+# Nodes have no listening ports. All scrapes hit the platform's /agent-proxy/{nodeID}/metrics (host metrics) and
+# /agent-proxy/{nodeID}/besu-metrics (native Besu metrics); the platform relays them to the node over the WS the agent dialed out.
+# Targets come dynamically from the platform's /sd/targets (node joins/removals are picked up automatically).
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules.yml
+  # User-defined alert rules (rendered dynamically by the platform, see internal/alerting/rules.go). A glob, not a fixed file name:
+  # right after the volume is created and before the platform writes to it the directory is empty; a glob matching no files is valid and does not make Prometheus fail to start.
+  - /etc/prometheus/rules.d/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: bsos-nodes
+    # scheme/metrics_path both come from the __scheme__ / __metrics_path__ labels in /sd/targets (two targets per node,
+    # source=host / besu), so they are not hard-coded here.
+    scrape_timeout: 10s        # < scrape_interval; leaves room for the extra proxy hop but must not overrun the next round
+    body_size_limit: 8MB       # matches the platform-side maxResponseBytes (backend/internal/pki/mux.go); one body should not have two limits
+    # HTTP service discovery: the platform serves targets + node/org labels from the nodes table, with an SD_TOKEN bearer.
+    http_sd_configs:
+      - url: http://server:8080/sd/targets
+        refresh_interval: 30s
+        authorization:
+          type: Bearer
+          credentials_file: /sd-token/sd_token  # server (root) writes it to the shared volume as 0640 + gid 65534 so the container's nobody user can read it
+    # Scrapes use the same SD_TOKEN too (they hit the platform, not the node); the platform strips this header before relaying to the agent.
+    authorization:
+      type: Bearer
+      credentials_file: /sd-token/sd_token
+    relabel_configs:
+      # Every node's target address is the platform itself, so the default instance (= address) would be identical for all; use node as instance instead.
+      - source_labels: [node]
+        target_label: instance
+
+  - job_name: bsos-platform
+    scheme: http                    # internal call within the same docker network; same trust model as /sd/targets (bearer, not mTLS)
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["server:8080"]
+    authorization:
+      type: Bearer
+      credentials_file: /sd-token/sd_token  # same SD_TOKEN as /sd/targets

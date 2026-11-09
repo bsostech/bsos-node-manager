@@ -1,0 +1,17 @@
+bin/
+# output of running go build ./cmd/server directly in backend/
+/server
+.env
+
+# Frontend build output (the go:embed source). The directory keeps an empty tracked .gitkeep (so people who
+# have not run `npm run build` can still compile -- go:embed requires the directory to have content at compile
+# time); the real dist (index.html/assets/...) is produced by the build and not version-controlled. index.html
+# itself is deliberately not committed: `npm run build` would overwrite a tracked file, and everyone who built
+# the frontend would see it permanently modified in `git status`. The .gitkeep trick avoids that at the root:
+# build output is brand-new untracked files that never dirty the working tree. When index.html is missing the
+# Go side serves a hardcoded notice page (see embed.go).
+# The root .gitignore has a global `dist/` rule, so explicitly un-ignore this directory first for the rules
+# below to take effect (git does not look inside an already-ignored directory for negation rules, a common trap).
+!internal/webapp/dist/
+internal/webapp/dist/*
+!internal/webapp/dist/.gitkeep

@@ -1,0 +1,9 @@
+# Models only: the agent's JSON API shares the contract's component schemas (HardwareMetrics etc.)
+package: api
+generate:
+  models: true
+output: internal/api/types.gen.go
+# Do not prune schemas no path references: the agent's /logblocks only goes through the tunnel and is not a
+# platform API, but both sides still need the same types
+output-options:
+  skip-prune: true

@@ -1,0 +1,24 @@
+BSOS Node Manager
+Copyright 2026 BSOS
+
+This product includes third-party software. Their license notices are in
+third_party/NOTICES-backend.txt, NOTICES-agent.txt and NOTICES-frontend.txt.
+
+This product bundles the following fonts, licensed under the SIL Open Font
+License, Version 1.1. The license texts are in third_party/fonts/.
+
+  IBM Plex Sans, IBM Plex Mono
+    Copyright © 2017 IBM Corp. with Reserved Font Name "Plex"
+    Used by the web UI (frontend/, via @fontsource). A subset of IBM Plex Mono
+    is embedded in the node runbook (frontend/src/runbook/) under the name
+    "BSOS Mono".
+    License: third_party/fonts/OFL-IBM-Plex.txt
+
+  Noto Sans TC
+    Copyright 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'
+    Used by the web UI (frontend/, via @fontsource). A subset is embedded in
+    the node runbook (frontend/src/runbook/) under the name "BSOS Sans TC".
+    License: third_party/fonts/OFL-Noto-Sans-TC.txt
+
+"BSOS" and the BSOS logos are trademarks of BSOS. The Apache License does
+not grant permission to use them; see TRADEMARKS.md.
