@@ -4,6 +4,8 @@
 
 BSOS 節點治理工具是給 Hyperledger Besu 聯盟鏈參與單位用的管理平台。每個單位在自己的主機上部署一套，管理自家的節點：驗證者投票、節點權限與 RPC 存取、監控與告警。各單位的平台彼此獨立，憑證由各自的平台簽發，不經過任何中央服務。
 
+操作手冊：https://present.bsos.co/p/bsos-node-manager-docs
+
 ## 功能
 
 - **驗證者治理**：提案並投票增減驗證者（IBFT 2.0、QBFT），可看每個提案的票數與紀錄。
@@ -44,6 +46,8 @@ sudo bash install.sh --platform <platform>:8443 --token <join-token> [--runtime 
 ```
 
 節點要連得到平台的 8443 埠。Besu 必須開啟 ETH、NET，以及 IBFT 或 QBFT 的 RPC API。WEB3（顯示 Besu 版本）、ADMIN（peer 管理、日誌等級）、TXPOOL（交易池檢視）、PERM（交易地址授權）是選用，沒開只少那一項功能。開了哪些會列在節點頁上。詳見 [`deploy/agent/README.zh-TW.md`](deploy/agent/README.zh-TW.md)。
+
+完整的安裝、接入與維運步驟見[操作手冊](https://present.bsos.co/p/bsos-node-manager-docs)。
 
 ## 目錄結構
 

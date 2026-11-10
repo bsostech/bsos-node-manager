@@ -4,6 +4,8 @@ English | [繁體中文](README.zh-TW.md)
 
 BSOS Node Manager is a management platform for organizations that take part in a Hyperledger Besu consortium chain. Each organization deploys it on its own hosts to manage the nodes it runs: validator voting, node permissioning and RPC access, monitoring and alerts. Platforms of different organizations are independent; each issues its own certificates, and nothing goes through a central service.
 
+Documentation: https://present.bsos.co/p/bsos-node-manager-docs
+
 ## Features
 
 - **Validator governance** – propose and vote on adding or removing validators (IBFT 2.0 and QBFT), and see each proposal's vote count and history.
@@ -44,6 +46,8 @@ sudo bash install.sh --platform <platform>:8443 --token <join-token> [--runtime 
 ```
 
 Nodes must be able to reach the platform on port 8443. Besu must enable the ETH, NET and IBFT or QBFT RPC APIs. WEB3 (Besu version display), ADMIN (peer management, log level), TXPOOL (transaction pool view) and PERM (authorized sender addresses) are optional; without them only that feature is missing. The node page lists what is enabled. See [`deploy/agent/README.md`](deploy/agent/README.md).
+
+For the full install, onboarding and operations guide, see the [manual](https://present.bsos.co/p/bsos-node-manager-docs).
 
 ## Repository layout
 
