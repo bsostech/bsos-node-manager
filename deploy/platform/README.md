@@ -12,7 +12,7 @@ The server image is based on UBI 9 (Red Hat's freely redistributable base, same 
 
 ## Before you deploy
 
-**What gets built.** `backend/Dockerfile` builds the server image from `backend/` and `frontend/` in several stages, embedding the frontend `dist/` and `install.sh` with `go:embed`. The host does not need Node or Go. The agent binary is **not** in the image. Build it first with `deploy/agent/build-agent.sh` (it builds in Docker; amd64 only by default, add `--arch both` if you have aarch64 nodes). The output goes into `docker-compose/agent-bin/`, which is mounted read-only into the container. Without it, nodes get a 404 when the installer downloads the agent.
+**What gets built.** `backend/Dockerfile` builds the server image from `backend/` and `frontend/` in several stages, embedding the frontend `dist/` and `install.sh` with `go:embed`. The host does not need Node or Go. The agent binary is **not** in the image. `up.sh` builds it on the first run, or run `deploy/agent/build-agent.sh` (it builds amd64 and arm64 in Docker). The output goes into `docker-compose/agent-bin/`, which is mounted read-only into the container. Without it, nodes get a 404 when the installer downloads the agent.
 
 **Edition (Core / Enterprise).** `up.sh` builds Enterprise (image `bsos-node-manager-enterprise`) when `backend/enterprise/` exists, and Core (`bsos-node-manager`) otherwise. `--core` forces Core. A plain `docker compose up --build` builds Core; for Enterprise pass `EDITION=enterprise SERVER_IMAGE=bsos-node-manager-enterprise`.
 

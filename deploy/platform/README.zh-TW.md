@@ -12,7 +12,7 @@ server 映像以 UBI 9 為基底（Red Hat 可免費散布的映像，套件與 
 
 ## 部署前
 
-**建置內容**：`backend/Dockerfile` 以多階段建置，從 `backend/` 和 `frontend/` 建出 server 映像，前端 `dist/` 和 `install.sh` 用 `go:embed` 嵌進去，主機不用裝 Node 或 Go。agent 執行檔**不在映像裡**，要先跑 `deploy/agent/build-agent.sh`（在 Docker 裡編；預設只建 amd64，有 aarch64 節點就加 `--arch both`）。產出放在 `docker-compose/agent-bin/`，以唯讀方式掛進容器。沒建的話，節點安裝時下載 agent 會拿到 404。
+**建置內容**：`backend/Dockerfile` 以多階段建置，從 `backend/` 和 `frontend/` 建出 server 映像，前端 `dist/` 和 `install.sh` 用 `go:embed` 嵌進去，主機不用裝 Node 或 Go。agent 執行檔**不在映像裡**，`up.sh` 第一次執行時會建好，也可以自己跑 `deploy/agent/build-agent.sh`（在 Docker 裡編 amd64 與 arm64）。產出放在 `docker-compose/agent-bin/`，以唯讀方式掛進容器。沒建的話，節點安裝時下載 agent 會拿到 404。
 
 **版本（開源版／商業版）**：`up.sh` 發現 `backend/enterprise/` 就建商業版（映像 `bsos-node-manager-enterprise`），沒有就建開源版（`bsos-node-manager`）；加 `--core` 強制建開源版。直接 `docker compose up --build` 預設建開源版，要建商業版就帶 `EDITION=enterprise SERVER_IMAGE=bsos-node-manager-enterprise`。
 

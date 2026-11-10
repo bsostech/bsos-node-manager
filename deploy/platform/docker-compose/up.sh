@@ -190,7 +190,7 @@ if $DRY_RUN; then
   [ "$MODE" != https ] || log "$(t "Copy $CERT and $KEY to certs/server.crt and certs/server.key (owner uid 10001, needs sudo)" "把 $CERT 與 $KEY 複製成 certs/server.crt、certs/server.key(擁有者 uid 10001,需要 sudo)")"
   { [ -f server.env ] && grep -qE '^TZ=' server.env; } || log "$(t "Add the host time zone to server.env as TZ" "把主機時區寫進 server.env 的 TZ")"
   if ls agent-bin/besu-agent-linux-* >/dev/null 2>&1; then log "$(t "Reuse the agent in agent-bin/" "沿用 agent-bin/ 裡的 agent")"
-  else log "$(t "Build the x86_64 agent into agent-bin/" "建 x86_64 的 agent 到 agent-bin/")"; fi
+  else log "$(t "Build the agent (x86_64 and aarch64) into agent-bin/" "建 agent(x86_64 與 aarch64)到 agent-bin/")"; fi
   $OFFLINE_ROOT && log "$(t "Create the CA with the root private key written to root-ca.key (only if the database has no CA yet)" "建立 CA,root 私鑰寫到 root-ca.key(只在 DB 還沒有 CA 時)")"
   [ -z "$CA_IMPORT" ] || log "$(t "Import the CA from $CA_IMPORT (only if the database has no CA yet)" "從 $CA_IMPORT 匯入 CA(只在 DB 還沒有 CA 時)")"
   log "$(t "docker compose up -d --build: start or replace the containers, publishing ports $PORTS" "docker compose up -d --build:啟動或替換容器，對外開 $PORTS")"
@@ -273,10 +273,10 @@ if ! grep -qE '^TZ=' server.env; then
 fi
 
 step "$(t "Check agent-bin" "agent-bin 檢查")"
-# Node installs download the agent from here, so a first deployment builds the x86_64 one; aarch64
-# nodes need build-agent.sh --arch both. An existing build is left alone, so reruns stay fast.
+# Node installs download the agent from here, so a first deployment builds it (x86_64 and aarch64).
+# An existing build is left alone, so reruns stay fast.
 if ! ls agent-bin/besu-agent-linux-* >/dev/null 2>&1; then
-  log "$(t "agent-bin/ is empty; building the x86_64 agent (for aarch64 nodes run deploy/agent/build-agent.sh --arch both later)" "agent-bin/ 是空的,先建 x86_64 的 agent(有 aarch64 節點之後再跑 deploy/agent/build-agent.sh --arch both)")"
+  log "$(t "agent-bin/ is empty; building the agent (x86_64 and aarch64)" "agent-bin/ 是空的,建 agent(x86_64 與 aarch64)")"
   ZH_ARG=""; [ "$ZH" = 1 ] && ZH_ARG="--zh"
   "$HERE/../../agent/build-agent.sh" $ZH_ARG
 fi

@@ -29,7 +29,6 @@ agent 不對網路開任何入站埠，唯一的監聽是收 Besu 日誌的 loop
 
 ```bash
 cd deploy/platform/docker-compose
-../../agent/build-agent.sh --arch both   # 用 Docker 把 agent 編進 agent-bin/
 ./up.sh --org-id org-a.example --domain platform.example.com --acme --email ops@example.com
 ```
 

@@ -29,11 +29,7 @@
 - 目標主機：Docker 和 Compose 外掛。沒有的話，`up.sh --install-docker` 會用 Docker 官方腳本裝**最新版**。預設不會裝任何東西。
 - 防火牆：開 **80/443** 給畫面用（80 只轉址到 443），開 **8443** 給 agent 接入。**8544** 只在跨單位唯讀時才開，需要商業版和 `CROSS_ORG_ENABLED`，而且只對要看你們的單位開。Postgres 和 9090 不對外。
   - **不需要對節點開任何東西。**Prometheus 抓的是平台的 `/agent-proxy/{nodeID}/metrics`，平台再透過 agent 撥出的 8443 連線轉給節點。平台不會主動連節點。
-- agent 執行檔放在 `agent-bin/`，在 Docker 裡建，不用裝 Go。`agent-bin/` 是空的話，`up.sh` 會自己建 amd64 版。有 arm64 節點就另外跑：
-
-```bash
-../../agent/build-agent.sh --arch both   # amd64 + arm64
-```
+- agent 執行檔放在 `agent-bin/`，在 Docker 裡建，不用裝 Go。`agent-bin/` 是空的話，`up.sh` 會自己建（amd64 與 arm64）；之後要重建就跑 `../../agent/build-agent.sh`。
 
 ## 部署（選一種 TLS 模式）
 
@@ -73,7 +69,7 @@ cd deploy/platform/docker-compose
 
 1. 建立 `server.env`，產生 `CA_MASTER_KEY`。已經有的**不會覆蓋**。
 2. 放好憑證（自備憑證模式），寫入 `TLS_MODE`、`SITE_DOMAIN`、`ACME_EMAIL` 等設定。這些不是密鑰，每次帶 TLS 參數都會覆寫。
-3. `agent-bin/` 是空的就建 amd64 的 agent。
+3. `agent-bin/` 是空的就建 agent（amd64 與 arm64）。
 4. `.env` 還沒有資料庫密碼時產生一組（`POSTGRES_PASSWORD`，已經有的**不會覆蓋**），再執行 `docker compose up -d --build`。
 
 訊息預設是英文，加 `--zh` 改用中文。要用已存的設定重啟，直接跑 `./up.sh`，不用帶參數。
@@ -168,11 +164,10 @@ docker compose down -v            # 停止並刪除所有資料，見下方
 
 ## 常見錯誤
 
-1. 只建了 amd64，卻有 arm64 節點：那些節點下載 agent 時會拿到 404。跑 `build-agent.sh --arch both`。
-2. 純 HTTP（`--http`）卻手動設了 `COOKIE_SECURE=true`：登入一直回 401。把那行拿掉，cookie 會自己跟著 TLS 模式。
-3. 換了 `CA_MASTER_KEY`，或兩個單位共用一把：CA 會解不開。`up.sh` 不會覆蓋已存在的 `server.env`，不要自己手動換。
+1. 純 HTTP（`--http`）卻手動設了 `COOKIE_SECURE=true`：登入一直回 401。把那行拿掉，cookie 會自己跟著 TLS 模式。
+2. 換了 `CA_MASTER_KEY`，或兩個單位共用一把：CA 會解不開。`up.sh` 不會覆蓋已存在的 `server.env`，不要自己手動換。
    `.env` 的 `POSTGRES_PASSWORD` 也一樣：postgres 只在資料 volume 第一次建立時套用密碼，換掉之後 server 就連不上資料庫。
-4. `docker compose down -v` 會把 CA、資料庫和 ACME 憑證快取一起刪掉，等於重置整個單位的身分：server 會用同一把 `CA_MASTER_KEY` 產生新的 root 和 intermediate，所有已接入的節點都要重新接入，ACME 模式也會重新申請憑證。之後要再跑一次 `./up.sh --org-id … --domain/--host …`。
+3. `docker compose down -v` 會把 CA、資料庫和 ACME 憑證快取一起刪掉，等於重置整個單位的身分：server 會用同一把 `CA_MASTER_KEY` 產生新的 root 和 intermediate，所有已接入的節點都要重新接入，ACME 模式也會重新申請憑證。之後要再跑一次 `./up.sh --org-id … --domain/--host …`。
 
 ## 排錯
 

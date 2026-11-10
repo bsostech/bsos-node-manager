@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Platform side: build the agent's Linux binary into docker-compose's agent-bin/.
-# Step 5 of the node install.sh and the "Upgrade Agent" command both fetch it from the platform; an empty agent-bin means 404.
+# The node install.sh and the "Upgrade Agent" command both fetch it from the platform; an empty agent-bin means 404.
 # Builds with Docker, so the platform does not need Go. Can be run from this directory or any path.
-#   ./build-agent.sh                # amd64 (default, most cloud VMs)
-#   ./build-agent.sh --arch both    # amd64 + arm64
-#   ./build-agent.sh --arch arm64
+#   ./build-agent.sh                # amd64 + arm64 (default; both from one checkout, so their versions match)
+#   ./build-agent.sh --arch amd64   # one architecture only
 #   ./build-agent.sh --out <dir>    # custom output (e.g. a custom AGENT_BINARY_DIR)
 #   ./build-agent.sh --zh           # print messages in Chinese (default English)
 set -euo pipefail
@@ -31,7 +30,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 AGENT_DIR="$ROOT/agent"
 OUT="$ROOT/deploy/platform/docker-compose/agent-bin"
-ARCHES="amd64"
+ARCHES="amd64 arm64"
 VERSION=""
 
 while [ $# -gt 0 ]; do

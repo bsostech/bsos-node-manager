@@ -29,7 +29,6 @@ You need Docker with the Compose plugin on the platform host. Each node needs Li
 
 ```bash
 cd deploy/platform/docker-compose
-../../agent/build-agent.sh --arch both   # builds the agent binaries into agent-bin/ with Docker
 ./up.sh --org-id org-a.example --domain platform.example.com --acme --email ops@example.com
 ```
 

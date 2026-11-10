@@ -29,11 +29,7 @@ The image is built by `backend/Dockerfile` in several stages: first the frontend
 - Target host: Docker with the Compose plugin. If it is missing, `up.sh --install-docker` installs the **latest** version with Docker's official script. It does not install anything by default.
 - Firewall: open **80/443** for the UI (80 only redirects to 443) and **8443** for agent join. Open **8544** only for cross-org read-only access, which needs the Enterprise edition and `CROSS_ORG_ENABLED`, and only to the organizations that will view yours. Postgres and 9090 stay closed.
   - **Nothing needs to be opened toward the nodes.** Prometheus scrapes the platform's `/agent-proxy/{nodeID}/metrics`, and the platform forwards it to the node over the 8443 connection the agent dialed out. The platform never connects to a node.
-- The agent binary goes in `agent-bin/`, built in Docker, so Go is not needed. If `agent-bin/` is empty, `up.sh` builds the amd64 version itself. If you have arm64 nodes, run:
-
-```bash
-../../agent/build-agent.sh --arch both   # amd64 + arm64
-```
+- The agent binary goes in `agent-bin/`, built in Docker, so Go is not needed. If `agent-bin/` is empty, `up.sh` builds it (amd64 and arm64) itself; to rebuild later, run `../../agent/build-agent.sh`.
 
 ## Deploy (pick a TLS mode)
 
@@ -73,7 +69,7 @@ Which to choose:
 
 1. Creates `server.env`, generating `CA_MASTER_KEY`. It **never overwrites** an existing one.
 2. Installs certificates (manual mode) and writes `TLS_MODE`, `SITE_DOMAIN`, `ACME_EMAIL` and similar settings. These are not secrets and are overwritten whenever you pass a TLS option.
-3. Builds the amd64 agent if `agent-bin/` is empty.
+3. Builds the agent (amd64 and arm64) if `agent-bin/` is empty.
 4. Generates a database password into `.env` if there is none yet (`POSTGRES_PASSWORD`; it **never overwrites** an existing one), then runs `docker compose up -d --build`.
 
 Messages are in English; add `--zh` to print them in Chinese. To restart with the saved settings, run `./up.sh` with no options.
@@ -168,11 +164,10 @@ The first time, and after wiping volumes, always use `./up.sh`: it creates `serv
 
 ## Common mistakes
 
-1. Building only amd64 with arm64 nodes present: those nodes get a 404 when downloading the agent. Run `build-agent.sh --arch both`.
-2. Plain HTTP (`--http`) with `COOKIE_SECURE=true` set by hand: login keeps returning 401. Remove the line; the cookie follows the TLS mode by itself.
-3. Changing `CA_MASTER_KEY`, or sharing one between two organizations: the CA can no longer be decrypted. `up.sh` never overwrites an existing `server.env`; do not change the key by hand.
+1. Plain HTTP (`--http`) with `COOKIE_SECURE=true` set by hand: login keeps returning 401. Remove the line; the cookie follows the TLS mode by itself.
+2. Changing `CA_MASTER_KEY`, or sharing one between two organizations: the CA can no longer be decrypted. `up.sh` never overwrites an existing `server.env`; do not change the key by hand.
    The same goes for `POSTGRES_PASSWORD` in `.env`: postgres applies the password only when its data volume is first created, so after a change the server can no longer connect to the database.
-4. `docker compose down -v` deletes the CA, the database and the ACME certificate cache together. It resets the organization's identity: the server bootstraps a new root and intermediate with the same `CA_MASTER_KEY`, every node that had joined must re-join, and in ACME mode the certificate is requested again. After that, run `./up.sh --org-id … --domain/--host …` again.
+3. `docker compose down -v` deletes the CA, the database and the ACME certificate cache together. It resets the organization's identity: the server bootstraps a new root and intermediate with the same `CA_MASTER_KEY`, every node that had joined must re-join, and in ACME mode the certificate is requested again. After that, run `./up.sh --org-id … --domain/--host …` again.
 
 ## Troubleshooting
 
