@@ -148,6 +148,6 @@ sudo mkdir -p /etc/besu && sudo curl -fsSL "{{PLATFORM_URL}}/api/v1/platform/bes
 | RPC 被拒（401） | 節點設的 JWT 公鑰不是平台這把，或節點時鐘差太多 | 重新下載平台公鑰、校正時鐘，重啟 Besu |
 | RPC 連不上 127.0.0.1:{{RPC_PORT}} | Besu 沒在跑、`rpc-http-enabled` 沒開、RPC 沒聽在本機 loopback，或埠不同 | 確認 Besu 在跑、設定已套用、埠與平台設定相同 |
 | RPC 缺 namespace | `rpc-http-api` 少了必要的項目 | 至少需有 `ETH,NET,WEB3,IBFT,QBFT`，重啟 Besu；要用的選用功能再加 `ADMIN`、`TXPOOL`、`PERM` |
-| metrics 抓不到 | `metrics-enabled` 沒開、沒聽在本機 loopback，或埠不是 {{METRICS_PORT}} | 開啟 metrics、確認埠，重啟 Besu |
+| metrics 讀不到 | `metrics-enabled` 沒開、沒聽在本機 loopback，或埠不是 {{METRICS_PORT}} | 開啟 metrics、確認埠，重啟 Besu |
 | 日誌「未啟用」（選用） | 沒設 `LOG4J_CONFIGURATION_FILE` | 要看日誌才照「準備 Besu → 日誌」設定；不需要可略過 |
 | 日誌「已斷線」（選用） | 接過之後停了：Besu 重啟後沒帶 `LOG4J_CONFIGURATION_FILE`、送往位址與 Agent 收的不同，或被防火牆擋住 | 照「準備 Besu → 日誌」重設 |

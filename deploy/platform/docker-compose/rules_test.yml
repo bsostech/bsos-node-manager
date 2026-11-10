@@ -178,8 +178,8 @@ tests:
         exp_alerts:
           - exp_labels: { job: bsos-nodes, instance: node-a1, node: node-a1, org: org-A, source: besu, severity: critical, scope: ledger }
             exp_annotations:
-              summary: "節點 node-a1 Besu metrics 抓不到"
-              description: "agent 連得上,但抓不到 Besu 原生 metrics:Besu 沒有在跑,或 metrics-enabled 沒開、metrics 埠與平台記錄的不同。鏈指標此時都不會更新。"
+              summary: "節點 node-a1 Besu 指標讀不到"
+              description: "agent 連得上,但讀不到 Besu 原生 metrics:Besu 沒有在跑,或 metrics-enabled 沒開、metrics 埠與平台記錄的不同。鏈指標此時都不會更新。"
               rule_name: BesuMetricsDown
       - eval_time: 4m
         alertname: NodeOffline
@@ -187,7 +187,7 @@ tests:
           - exp_labels: { job: bsos-nodes, instance: node-a2, node: node-a2, org: org-A, source: host, severity: critical, scope: net }
             exp_annotations:
               summary: "節點 node-a2 連線中斷"
-              description: "Prometheus 抓不到 node-a2 的指標:agent 沒有連上平台,或 agent 已停止。"
+              description: "Prometheus 讀不到 node-a2 的指標:agent 沒有連上平台,或 agent 已停止。"
               rule_name: NodeOffline
 
   # Dual thresholds + resolve delay (NodeCpuHigh: fires at > 90, resolves at <= 85, for 5m, resolve delay 2m):

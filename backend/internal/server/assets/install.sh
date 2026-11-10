@@ -244,7 +244,7 @@ else
   step "$(t "Download the agent binary (linux/${GOARCH})" "下載 agent binary(linux/${GOARCH})")"
   curl -fsSL "${PLATFORM_HTTP}/besu-agent-linux-${GOARCH}" -o "${BIN}.new"
   expected="$(curl -fsSL "${PLATFORM_HTTP}/besu-agent-linux-${GOARCH}.sha256" | awk '{print $1}')"
-  [ -n "$expected" ] || die "$(t "could not get the agent binary's SHA-256 (${PLATFORM_HTTP}/besu-agent-linux-${GOARCH}.sha256)" "抓不到 agent binary 的 SHA-256 校驗值(${PLATFORM_HTTP}/besu-agent-linux-${GOARCH}.sha256)")" 3
+  [ -n "$expected" ] || die "$(t "could not get the agent binary's SHA-256 (${PLATFORM_HTTP}/besu-agent-linux-${GOARCH}.sha256)" "無法取得 agent binary 的 SHA-256 校驗值(${PLATFORM_HTTP}/besu-agent-linux-${GOARCH}.sha256)")" 3
 fi
 actual="$(sha256sum "${BIN}.new" | awk '{print $1}')"
 if [ "$expected" != "$actual" ]; then

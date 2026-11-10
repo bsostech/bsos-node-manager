@@ -412,7 +412,7 @@
       "healthy": "agent 在線、RPC 打得到、Besu 自報沒有落後。",
       "syncing": "Besu 自報落後鏈頭，正在追；表格顯示落後幾塊。",
       "offline": "agent 現在斷線，或 agent 在線但 Besu 已停止（標「Besu 已停止」）。",
-      "rpc_unreachable": "agent 在線，但打不到本節點的 Besu。多半是 RPC 沒開或設定錯；平台還沒能確認 Besu 有沒有在跑時，也可能是 Besu 停了，請到節點主機確認。"
+      "rpc_unreachable": "agent 在線，但連不上本節點的 Besu。多半是 RPC 沒開或設定錯；平台還沒能確認 Besu 有沒有在跑時，也可能是 Besu 停了，請到節點主機確認。"
     },
     "colMem": "記憶體",
     "colJvm": "Besu 記憶體",
@@ -499,7 +499,7 @@
       },
       "unknown": {
         "term": "無法得知",
-        "text": "節點離線或打不到它的 RPC，平台讀不到同步狀態。"
+        "text": "節點離線或連不上它的 RPC，平台讀不到同步狀態。"
       }
     },
     "turnBlock": "區塊高度",
@@ -770,9 +770,9 @@
     "noMatch": "沒有符合的規則",
     "cond": "{{node}}的{{metric}} {{op}} {{th}}",
     "kind": {
-      "platform_down": "平台本身抓不到",
+      "platform_down": "平台本身連不上",
       "node_offline": "節點的 agent 連不上",
-      "besu_metrics_down": "agent 在線但 Besu metrics 抓不到",
+      "besu_metrics_down": "agent 在線但 Besu 指標讀不到",
       "chain_slow": "距最後一塊的時間達到正常出塊時間的 {{x}} 倍",
       "validators_missing": "有驗證者沒參與共識，但鏈還在出塊",
       "quorum_lost": "沒參與共識的驗證者超過容錯數，鏈停止出塊"
@@ -829,7 +829,7 @@
       "NodeJvmHeapHigh": "Besu 記憶體使用率過高"
     },
     "summary": {
-      "PlatformDown": "平台服務中斷，所有節點的指標都抓不到",
+      "PlatformDown": "平台服務中斷，所有節點的指標都讀不到",
       "NodeOffline": "節點 {{node}} 連線中斷",
       "BesuMetricsDown": "節點 {{node}} Besu 指標讀不到",
       "NodePeerCountLow": "節點 {{node}} 連線數過低（{{value}}）",
@@ -846,9 +846,9 @@
       "NodeJvmHeapHigh": "節點 {{node}} Besu 記憶體使用率過高（{{value}}%）"
     },
     "cause": {
-      "PlatformDown": "Prometheus 抓不到平台的指標。節點的指標都經平台取得，平台不在時所有節點都抓不到，節點離線告警會先壓下，請先排除平台本身。",
-      "NodeOffline": "Prometheus 抓不到 {{node}} 的指標：agent 沒有連上平台，或 agent 已停止。",
-      "BesuMetricsDown": "agent 連得上，但抓不到 Besu 的指標：Besu 沒有在跑，或指標功能沒開。",
+      "PlatformDown": "Prometheus 讀不到平台的指標。節點的指標都經平台取得，平台不在時所有節點的指標都讀不到，節點離線告警會先壓下，請先排除平台本身。",
+      "NodeOffline": "Prometheus 讀不到 {{node}} 的指標：agent 沒有連上平台，或 agent 已停止。",
+      "BesuMetricsDown": "agent 連得上，但讀不到 Besu 的指標：Besu 沒有在跑，或指標功能沒開。",
       "NodePeerCountLow": "P2P 連線太少，有孤立的風險。",
       "NodeCpuHigh": "CPU 長時間滿載，出塊與同步可能變慢。",
       "NodeMemHigh": "主機記憶體吃緊，Besu 可能變慢或被系統終止。",
@@ -923,12 +923,12 @@
     "agentDown": "未連線",
     "agentOutdated": "版本過舊，平台拒絕連線",
     "agentOutdatedHint": "在節點主機跑升級指令換上新版，換好就會自動連上。",
-    "rpcDown": "打不到（127.0.0.1:{{port}}）",
+    "rpcDown": "連不上（127.0.0.1:{{port}}）",
     "rpcDownHint": "可能原因：Besu 沒在跑、RPC 沒開（rpc-http-enabled）、RPC 沒聽在本機 loopback，或埠與「基本資料」分頁的本機埠不同。",
     "rpcUnauthorized": "被拒（401）",
     "rpcUnauthorizedHint": "節點設的 JWT 公鑰不是平台這把，或節點時鐘差太多。",
     "apisMissing": "缺 {{list}}",
-    "metricsDown": "抓不到（127.0.0.1:{{port}}）",
+    "metricsDown": "讀不到（127.0.0.1:{{port}}）",
     "metricsDownHint": "可能原因：Besu 沒開 metrics（metrics-enabled）、沒聽在本機 loopback，或埠與「基本資料」分頁的本機埠不同。metrics 是必要設定，沒開時會觸發 BesuMetricsDown 告警。",
     "impactRpc": "少了：鏈狀態、節點身分、驗證者投票、peer 推送、交易地址授權、日誌等級。",
     "impactMetrics": "少了：時序圖表與鏈告警。",
@@ -1297,7 +1297,7 @@
     "dotBehind": "落後 {{n}} 塊",
     "dotHelp": {
       "term": "名稱左邊的燈號",
-      "err": "紅燈（異常）：本單位節點 agent 斷線或打不到 RPC；或共識停滯時連不到的驗證者。",
+      "err": "紅燈（異常）：本單位節點 agent 斷線或連不上 RPC；或共識停滯時連不上的驗證者。",
       "warn": "橘燈（注意）：驗證者未正常參與共識，但鏈還在出塊；或落後區塊 {{lag}} 塊。門檻可在「告警與通知設定」調整。",
       "stalled": "共識停滯時看不出誰有參與，驗證者只標連不到的。",
       "idleTerm": "未正常參與共識",
@@ -1359,7 +1359,7 @@
       "agentOutdated": "Agent 版本過舊",
       "rpc401": "RPC 被拒（401）",
       "rpcDown": "RPC 連不上",
-      "metricsDown": "metrics 抓不到",
+      "metricsDown": "metrics 讀不到",
       "missing": "缺 {{apis}} namespace"
     }
   },

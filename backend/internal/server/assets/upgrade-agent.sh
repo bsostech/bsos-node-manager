@@ -115,7 +115,7 @@ curl_mtls() {
 
 step "$(t "Check the latest version on the platform (mTLS)" "查平台最新版本(mTLS)")"
 REMOTE_VER="$(curl_mtls "/pki/v1/agent-binary/${ARCH}/version" | tr -d '[:space:]')" \
-  || die "$(t "could not get the platform version (mTLS connection or certificate failed, or the platform has no .version)" "抓不到平台版本(mTLS 連線/憑證失敗,或平台未提供 .version)")" 3
+  || die "$(t "could not get the platform version (mTLS connection or certificate failed, or the platform has no .version)" "無法取得平台版本(mTLS 連線/憑證失敗,或平台未提供 .version)")" 3
 [ -n "$REMOTE_VER" ] || die "$(t "the platform returned an empty version" "平台回傳空版本")" 3
 # Local state: timeout as a backstop in case the binary hangs instead of printing its version;
 # empty result -> treated as needing an upgrade.
@@ -136,7 +136,7 @@ log "$(t "Downloaded → ${BIN}.new" "下載完成 → ${BIN}.new")"
 step "$(t "Checksum (SHA-256)" "完整性校驗(SHA-256,雙保險)")"
 EXPECTED_SHA="$(curl_mtls "/pki/v1/agent-binary/${ARCH}.sha256" | awk '{print $1}')"
 ACTUAL_SHA="$(sha256sum "${BIN}.new" | awk '{print $1}')"
-[ -n "$EXPECTED_SHA" ] || die "$(t "could not get the agent binary's SHA-256" "抓不到 agent binary 的 SHA-256 校驗值")" 3
+[ -n "$EXPECTED_SHA" ] || die "$(t "could not get the agent binary's SHA-256" "無法取得 agent binary 的 SHA-256 校驗值")" 3
 if [ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]; then
   rm -f "${BIN}.new"
   die "$(t "agent binary checksum mismatch (expected ${EXPECTED_SHA}, got ${ACTUAL_SHA}); the download may be broken or tampered with. Upgrade aborted" "agent binary 完整性校驗失敗(期望 ${EXPECTED_SHA},實際 ${ACTUAL_SHA})——下載可能中斷或遭竄改,已中止升級")" 3

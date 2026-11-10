@@ -309,17 +309,17 @@ const alert = (name: string, nodeId: string | null, scope: string, severity: 'cr
   annotations: { summary, description, ...(value != null ? { value } : {}) }, startsAt, ...(endsAt ? { endsAt } : {}),
 });
 export const alerts: Alert[] = FRESH ? [] : [
-  alert('NodeOffline', 'node-a5', 'net', 'critical', '節點 node-a5（org-a）連線中斷', 'Prometheus 抓不到 node-a5 的指標：agent 沒有連上平台，或 agent 已停止。', ago(12)),
+  alert('NodeOffline', 'node-a5', 'net', 'critical', '節點 node-a5（org-a）連線中斷', 'Prometheus 讀不到 node-a5 的指標：agent 沒有連上平台，或 agent 已停止。', ago(12)),
   alert('NodeDiskHigh', 'node-a3', 'hw', 'warning', '節點 node-a3 磁碟使用率過高（86%）', '鏈資料會持續成長，建議及早擴容。', ago(40), undefined, '86'),
-  alert('NodeOffline', 'node-a5', 'net', 'critical', '節點 node-a5（org-a）連線中斷', 'Prometheus 抓不到 node-a5 的指標：agent 沒有連上平台，或 agent 已停止。', ago(60 * 9), ago(60 * 7)),
+  alert('NodeOffline', 'node-a5', 'net', 'critical', '節點 node-a5（org-a）連線中斷', 'Prometheus 讀不到 node-a5 的指標：agent 沒有連上平台，或 agent 已停止。', ago(60 * 9), ago(60 * 7)),
   alert('ChainSlowSevere', null, 'consensus', 'critical', '出塊嚴重變慢', '可能有驗證者掉線，或驗證者之間失去共識。', ago(60 * 30), ago(60 * 29)),
   // Older history: so the inbox looks like it has been in use for a while
   alert('NodeBehind', 'node-a4', 'ledger', 'warning', '節點 node-a4 落後 120 塊', '這台的區塊高度追不上鏈頭，可能是同步變慢或連線不足。連線正常卻一直落後時，重啟 Besu。', ago(95), ago(70), '120'),
   alert('NodePeerCountLow', 'node-a4', 'net', 'warning', '節點 node-a4 連線數過低（1）', 'P2P 連線太少，有孤立的風險。', ago(60 * 5), ago(60 * 4), '1'),
   alert('NodeMemHigh', 'node-a2', 'hw', 'warning', '節點 node-a2 記憶體使用率過高（92%）', '主機記憶體吃緊，Besu 可能變慢或被系統終止。', ago(60 * 14), ago(60 * 13 + 20), '92'),
   alert('NodeCpuHigh', 'node-a1', 'hw', 'warning', '節點 node-a1 CPU 使用率過高（94%）', 'CPU 長時間滿載，出塊與同步可能變慢。', ago(60 * 26), ago(60 * 25 + 40), '94'),
-  alert('BesuMetricsDown', 'node-a3', 'ledger', 'critical', '節點 node-a3 Besu 指標讀不到', 'agent 連得上，但抓不到 Besu 的指標：Besu 沒有在跑，或指標功能沒開。', ago(60 * 40), ago(60 * 39 + 30)),
-  alert('NodeOffline', 'node-a2', 'net', 'critical', '節點 node-a2（org-a）連線中斷', 'Prometheus 抓不到 node-a2 的指標：agent 沒有連上平台，或 agent 已停止。', ago(60 * 52), ago(60 * 51 + 50)),
+  alert('BesuMetricsDown', 'node-a3', 'ledger', 'critical', '節點 node-a3 Besu 指標讀不到', 'agent 連得上，但讀不到 Besu 的指標：Besu 沒有在跑，或指標功能沒開。', ago(60 * 40), ago(60 * 39 + 30)),
+  alert('NodeOffline', 'node-a2', 'net', 'critical', '節點 node-a2（org-a）連線中斷', 'Prometheus 讀不到 node-a2 的指標：agent 沒有連上平台，或 agent 已停止。', ago(60 * 52), ago(60 * 51 + 50)),
 ];
 // Read state is per user (same as the backend): username -> the "id|fire" and "id|resolve" entries read. Mock state, reset on reload
 const alertReads: Record<string, Set<string>> = {};

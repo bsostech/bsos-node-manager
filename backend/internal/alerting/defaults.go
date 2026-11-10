@@ -53,7 +53,7 @@ var fixedRules = map[string]fixedRule{
 		expr:    constExpr(`up{job="bsos-platform"} == 0`),
 		summary: Text{"平台服務中斷,全體節點指標抓取停擺", "Platform down, no node metrics are being collected"},
 		description: Text{
-			"Prometheus 抓不到平台的 /metrics。節點指標經平台代理取得,平台不在等於所有節點都抓不到——此時的 NodeOffline 會被抑制,請先排除平台本身。",
+			"Prometheus 讀不到平台的 /metrics。節點指標經平台代理取得,平台不在等於所有節點的指標都讀不到——此時的 NodeOffline 會被抑制,請先排除平台本身。",
 			"Prometheus cannot scrape the platform's /metrics. Node metrics are collected through the platform, so while it is down no node can be scraped and NodeOffline is suppressed. Fix the platform first.",
 		},
 	},
@@ -62,7 +62,7 @@ var fixedRules = map[string]fixedRule{
 		expr:    constExpr(`up{job="bsos-nodes", source="host"} == 0` + unlessPlatformDown),
 		summary: Text{"節點 {{ $labels.node }} 連線中斷", "Node {{ $labels.node }} disconnected"},
 		description: Text{
-			"Prometheus 抓不到 {{ $labels.node }} 的指標:agent 沒有連上平台,或 agent 已停止。",
+			"Prometheus 讀不到 {{ $labels.node }} 的指標:agent 沒有連上平台,或 agent 已停止。",
 			"Prometheus cannot scrape metrics from {{ $labels.node }}: the agent is not connected to the platform, or it has stopped.",
 		},
 	},
@@ -70,9 +70,9 @@ var fixedRules = map[string]fixedRule{
 	"BesuMetricsDown": {
 		kind: api.AlertRuleKindBesuMetricsDown, scope: "ledger",
 		expr:    constExpr(`up{job="bsos-nodes", source="besu"} == 0 unless on (node) up{job="bsos-nodes", source="host"} == 0` + unlessPlatformDown),
-		summary: Text{"節點 {{ $labels.node }} Besu metrics 抓不到", "Node {{ $labels.node }} Besu metrics unavailable"},
+		summary: Text{"節點 {{ $labels.node }} Besu 指標讀不到", "Node {{ $labels.node }} Besu metrics unavailable"},
 		description: Text{
-			"agent 連得上,但抓不到 Besu 原生 metrics:Besu 沒有在跑,或 metrics-enabled 沒開、metrics 埠與平台記錄的不同。鏈指標此時都不會更新。",
+			"agent 連得上,但讀不到 Besu 原生 metrics:Besu 沒有在跑,或 metrics-enabled 沒開、metrics 埠與平台記錄的不同。鏈指標此時都不會更新。",
 			"The agent is reachable but Besu's own metrics cannot be scraped: Besu is not running, metrics-enabled is off, or the metrics port differs from the one the platform has on record. Chain metrics stop updating meanwhile.",
 		},
 	},
