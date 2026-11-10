@@ -31,7 +31,7 @@ footer: 新增 Besu 節點 · {{NODE_ID}}
 | RPC | 必要 | 鏈狀態、節點身分與各項操作 |
 | metrics | 必要 | 監控圖表與鏈告警 |
 | RPC 認證 | 選用 | 只接受平台簽發的 token |
-| 帳戶白名單 | 選用 | 限制可送交易的帳戶 |
+| 交易地址授權 | 選用 | 限制哪些地址能送交易 |
 | 日誌 | 選用 | 在平台查看節點日誌 |
 
 RPC 的 namespace（下方完整設定全部列入；選用的沒開，平台照樣可用，只少那一項功能）：
@@ -42,7 +42,7 @@ RPC 的 namespace（下方完整設定全部列入；選用的沒開，平台照
 | IBFT QBFT | 必要 | 驗證者清單與投票 |
 | ADMIN | 選用 | peer 推送、日誌等級、讀取 epoch 長度 |
 | TXPOOL | 選用 | 交易池分頁 |
-| PERM | 選用 | 帳戶白名單 |
+| PERM | 選用 | 交易地址授權 |
 
 ## 準備 Besu
 
@@ -84,7 +84,7 @@ sudo curl -fsSL {{PUBKEY_URL}} \
 
 路徑可自訂，需與設定一致。
 
-### 帳戶白名單檔（選用）
+### 交易地址授權的白名單檔（選用）
 
 設定指向的白名單檔要先存在，且 Besu 的執行帳號可寫入（平台經 PERM API 改白名單）：
 
@@ -93,7 +93,7 @@ echo 'accounts-allowlist=[]' | sudo tee /var/lib/besu/accounts-allowlist.toml
 sudo chown besu:besu /var/lib/besu/accounts-allowlist.toml
 ```
 
-`besu:besu` 換成實際執行 Besu 的帳號。不用帳戶白名單時，從設定裡拿掉 `permissions-accounts-config-file-enabled` 與 `permissions-accounts-config-file` 兩行。
+`besu:besu` 換成實際執行 Besu 的帳號。不用交易地址授權時，從設定裡拿掉 `permissions-accounts-config-file-enabled` 與 `permissions-accounts-config-file` 兩行。
 
 ### 日誌（選用）
 
@@ -121,7 +121,7 @@ sudo mkdir -p /etc/besu && sudo curl -fsSL "{{PLATFORM_URL}}/api/v1/platform/bes
 ```
 
 :::note
-**接入碼不在這份文件裡。** 上面指令中的 `<接入碼>` 只是佔位。請到平台「登錄節點」第 ③ 步複製完整指令再執行。接入碼僅顯示一次，過了有效期（15 分鐘、1 小時或 24 小時）就不能用。
+**接入碼不在這份文件裡。** 上面指令中的 `<接入碼>` 只是佔位。執行前需到平台「登錄節點」第 ③ 步複製完整指令。接入碼僅顯示一次，過了有效期（15 分鐘、1 小時或 24 小時）就不能用。
 :::
 
 - 需要 root；systemd 模式需要 systemd，Docker 模式需要 docker 與 compose v2。
@@ -147,7 +147,7 @@ sudo mkdir -p /etc/besu && sudo curl -fsSL "{{PLATFORM_URL}}/api/v1/platform/bes
 | | 接入碼過期 | 回「節點登錄與設定」→「登錄節點」重新產生，再執行新指令 |
 | RPC 被拒（401） | 節點設的 JWT 公鑰不是平台這把，或節點時鐘差太多 | 重新下載平台公鑰、校正時鐘，重啟 Besu |
 | RPC 連不上 127.0.0.1:{{RPC_PORT}} | Besu 沒在跑、`rpc-http-enabled` 沒開、RPC 沒聽在本機 loopback，或埠不同 | 確認 Besu 在跑、設定已套用、埠與平台設定相同 |
-| RPC 缺 namespace | `rpc-http-api` 少了必要的項目 | 至少要有 `ETH,NET,WEB3,IBFT,QBFT`，重啟 Besu；要用的選用功能再加 `ADMIN`、`TXPOOL`、`PERM` |
+| RPC 缺 namespace | `rpc-http-api` 少了必要的項目 | 至少需有 `ETH,NET,WEB3,IBFT,QBFT`，重啟 Besu；要用的選用功能再加 `ADMIN`、`TXPOOL`、`PERM` |
 | metrics 抓不到 | `metrics-enabled` 沒開、沒聽在本機 loopback，或埠不是 {{METRICS_PORT}} | 開啟 metrics、確認埠，重啟 Besu |
 | 日誌「未啟用」（選用） | 沒設 `LOG4J_CONFIGURATION_FILE` | 要看日誌才照「準備 Besu → 日誌」設定；不需要可略過 |
 | 日誌「已斷線」（選用） | 接過之後停了：Besu 重啟後沒帶 `LOG4J_CONFIGURATION_FILE`、送往位址與 Agent 收的不同，或被防火牆擋住 | 照「準備 Besu → 日誌」重設 |
