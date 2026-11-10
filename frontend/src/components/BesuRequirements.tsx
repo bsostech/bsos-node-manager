@@ -142,7 +142,7 @@ export function BesuRequirements({ rpcPort, metricsPort, node, way: wayProp, onW
       lines: rpcLines(rpcPort),
       detail: (
         <dl className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-1 text-xs">
-          {(['ethNetWeb3', 'admin', 'ibftQbft', 'txpool', 'perm'] as const).map((ns) => (
+          {(['ethNet', 'web3', 'admin', 'ibftQbft', 'txpool', 'perm'] as const).map((ns) => (
             <div key={ns} className="contents">
               <dt className="font-mono text-ink-2">{t(`besuReq.ns.${ns}`)}</dt>
               <dd className="text-ink-3">{t(`besuReq.nsUse.${ns}`)}</dd>

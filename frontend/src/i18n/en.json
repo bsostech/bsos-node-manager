@@ -1082,14 +1082,16 @@
       "logs": "View node logs on the platform"
     },
     "ns": {
-      "ethNetWeb3": "ETH NET WEB3",
+      "ethNet": "ETH NET",
+      "web3": "WEB3",
       "admin": "ADMIN",
-      "ibftQbft": "IBFT QBFT",
+      "ibftQbft": "IBFT or QBFT",
       "txpool": "TXPOOL",
       "perm": "PERM"
     },
     "nsUse": {
-      "ethNetWeb3": "Height, sync, peer count, node identity",
+      "ethNet": "Height, sync, peer count, node identity",
+      "web3": "Optional: Besu version display",
       "admin": "Optional: peer push, log level, reading the epoch length",
       "ibftQbft": "Validator set and voting",
       "txpool": "Optional: transaction pool tab",

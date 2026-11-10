@@ -191,14 +191,19 @@ footer .logo svg{height:20px; margin-bottom:10px;}
 </thead>
 <tbody>
 <tr>
-<td class="k">ETH NET WEB3</td>
+<td class="k">ETH NET</td>
 <td>Required</td>
 <td>Height, sync, peer count, node identity</td>
 </tr>
 <tr>
-<td class="k">IBFT QBFT</td>
-<td>Required</td>
+<td class="k">IBFT or QBFT</td>
+<td>Required (one, matching the consensus)</td>
 <td>Validator set and voting</td>
+</tr>
+<tr>
+<td class="k">WEB3</td>
+<td>Optional</td>
+<td>Besu version display</td>
 </tr>
 <tr>
 <td class="k">ADMIN</td>
@@ -314,7 +319,7 @@ sudo chown besu:besu /var/lib/besu/accounts-allowlist.toml
 <tr>
 <td class="k">RPC missing namespace</td>
 <td><code>rpc-http-api</code> lacks a required namespace</td>
-<td>Include at least <code>ETH,NET,WEB3,IBFT,QBFT</code> and restart Besu; add <code>ADMIN</code>, <code>TXPOOL</code>, <code>PERM</code> for the optional features you use</td>
+<td>Include at least <code>ETH</code>, <code>NET</code> and <code>IBFT</code> or <code>QBFT</code> and restart Besu; add <code>WEB3</code>, <code>ADMIN</code>, <code>TXPOOL</code>, <code>PERM</code> for the optional features you use</td>
 </tr>
 <tr>
 <td class="k">Metrics not scraped</td>

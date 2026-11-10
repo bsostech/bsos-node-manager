@@ -43,7 +43,7 @@ curl -fsSL https://<platform>/install.sh -o install.sh
 sudo bash install.sh --platform <platform>:8443 --token <join-token> [--runtime systemd|docker]
 ```
 
-節點要連得到平台的 8443 埠。Besu 必須開啟 ETH、NET、WEB3，以及 IBFT 或 QBFT 的 RPC API。ADMIN（peer 管理、日誌等級）、TXPOOL（交易池檢視）、PERM（交易地址授權）是選用，沒開只少那一項功能。開了哪些會列在節點頁上。詳見 [`deploy/agent/README.zh-TW.md`](deploy/agent/README.zh-TW.md)。
+節點要連得到平台的 8443 埠。Besu 必須開啟 ETH、NET，以及 IBFT 或 QBFT 的 RPC API。WEB3（顯示 Besu 版本）、ADMIN（peer 管理、日誌等級）、TXPOOL（交易池檢視）、PERM（交易地址授權）是選用，沒開只少那一項功能。開了哪些會列在節點頁上。詳見 [`deploy/agent/README.zh-TW.md`](deploy/agent/README.zh-TW.md)。
 
 ## 目錄結構
 

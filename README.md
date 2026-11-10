@@ -43,7 +43,7 @@ curl -fsSL https://<platform>/install.sh -o install.sh
 sudo bash install.sh --platform <platform>:8443 --token <join-token> [--runtime systemd|docker]
 ```
 
-Nodes must be able to reach the platform on port 8443. Besu must enable the ETH, NET, WEB3 and IBFT or QBFT RPC APIs. ADMIN (peer management, log level), TXPOOL (transaction pool view) and PERM (authorized sender addresses) are optional; without them only that feature is missing. The node page lists what is enabled. See [`deploy/agent/README.md`](deploy/agent/README.md).
+Nodes must be able to reach the platform on port 8443. Besu must enable the ETH, NET and IBFT or QBFT RPC APIs. WEB3 (Besu version display), ADMIN (peer management, log level), TXPOOL (transaction pool view) and PERM (authorized sender addresses) are optional; without them only that feature is missing. The node page lists what is enabled. See [`deploy/agent/README.md`](deploy/agent/README.md).
 
 ## Repository layout
 

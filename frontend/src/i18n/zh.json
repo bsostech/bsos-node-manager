@@ -1077,14 +1077,16 @@
       "logs": "在平台查看節點日誌"
     },
     "ns": {
-      "ethNetWeb3": "ETH NET WEB3",
+      "ethNet": "ETH NET",
+      "web3": "WEB3",
       "admin": "ADMIN",
-      "ibftQbft": "IBFT QBFT",
+      "ibftQbft": "IBFT 或 QBFT",
       "txpool": "TXPOOL",
       "perm": "PERM"
     },
     "nsUse": {
-      "ethNetWeb3": "高度、同步、peer 數、節點身分",
+      "ethNet": "高度、同步、peer 數、節點身分",
+      "web3": "選用：顯示 Besu 版本",
       "admin": "選用：peer 推送、日誌等級、讀取 epoch 長度",
       "ibftQbft": "驗證者清單與投票",
       "txpool": "選用：交易池分頁",

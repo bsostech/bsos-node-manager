@@ -38,8 +38,9 @@ RPC namespaces (the full config below lists all of them; without an optional one
 
 | Namespace | Level | Used for |
 | --- | --- | --- |
-| ETH NET WEB3 | Required | Height, sync, peer count, node identity |
-| IBFT QBFT | Required | Validator set and voting |
+| ETH NET | Required | Height, sync, peer count, node identity |
+| IBFT or QBFT | Required (one, matching the consensus) | Validator set and voting |
+| WEB3 | Optional | Besu version display |
 | ADMIN | Optional | Peer push, log level, reading the epoch length |
 | TXPOOL | Optional | Transaction pool tab |
 | PERM | Optional | Account allowlist |
@@ -147,7 +148,7 @@ Restart Besu after changing the config and make sure it comes up before moving o
 | | Join code expired | Generate a new one under "Node registration & settings" → "Register node" and run the new command |
 | RPC rejected (401) | The node's JWT public key is not this platform's key, or the node clock is far off | Download the platform key again, fix the clock, restart Besu |
 | Cannot reach 127.0.0.1:{{RPC_PORT}} | Besu is not running, `rpc-http-enabled` is off, RPC does not listen on loopback, or the port differs | Check Besu is running, the config is applied and the port matches the platform |
-| RPC missing namespace | `rpc-http-api` lacks a required namespace | Include at least `ETH,NET,WEB3,IBFT,QBFT` and restart Besu; add `ADMIN`, `TXPOOL`, `PERM` for the optional features you use |
+| RPC missing namespace | `rpc-http-api` lacks a required namespace | Include at least `ETH`, `NET` and `IBFT` or `QBFT` and restart Besu; add `WEB3`, `ADMIN`, `TXPOOL`, `PERM` for the optional features you use |
 | Metrics not scraped | `metrics-enabled` is off, not listening on loopback, or the port is not {{METRICS_PORT}} | Turn on metrics, check the port, restart Besu |
 | Logs "Off" (optional) | `LOG4J_CONFIGURATION_FILE` not set | Follow "Prepare Besu → Logs" if you want logs; otherwise skip |
 | Logs "Disconnected" (optional) | Logs were connected and stopped: Besu restarted without `LOG4J_CONFIGURATION_FILE`, the address differs from where the agent listens, or a firewall blocks it | Redo "Prepare Besu → Logs" |
