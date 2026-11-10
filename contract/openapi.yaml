@@ -1972,7 +1972,7 @@ components:
     Me:
       type: object
       description: Current session (after SSO resolution); the frontend derives available permissions from role
-      required: [user, role, org]
+      required: [user, role, org, version]
       properties:
         user: { $ref: '#/components/schemas/User' }
         role: { $ref: '#/components/schemas/Role' }
@@ -1991,6 +1991,16 @@ components:
           nullable: true
           description: Address nodes use to download installers and reach the platform over HTTP (PUBLIC_API_BASE). null when unset, in which case the frontend falls back to the browser URL
           example: https://platform.org-a
+        version:
+          type: string
+          description: Platform build version - a release tag, git describe output for a build after a tag, or dev
+          example: v1.0.0
+        releaseDate:
+          type: string
+          nullable: true
+          pattern: '^\d{4}-\d{2}-\d{2}$'
+          description: Date (YYYY-MM-DD) of the commit the release tag points to; null for builds that are not an exact release
+          example: '2026-11-10'
 
     AuthConfig:
       type: object

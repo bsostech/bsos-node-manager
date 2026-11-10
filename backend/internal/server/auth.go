@@ -12,6 +12,7 @@ import (
 	"besu-manager/backend/internal/apierr"
 	"besu-manager/backend/internal/auth"
 	"besu-manager/backend/internal/store"
+	"besu-manager/backend/internal/version"
 )
 
 // Custom response objects: the strict server's Visit(w) lets us set/clear the session cookie here.
@@ -65,6 +66,11 @@ func (s *Server) meWithFlags(ctx context.Context, username *string, me api.Me) a
 	}
 	if s.publicAPIBase != "" {
 		me.PublicApiBase = &s.publicAPIBase
+	}
+	// Build version for the About dialog; only logged-in users see it, the login page (/auth/config) does not reveal it.
+	me.Version = version.Version
+	if version.ReleaseDate != "" {
+		me.ReleaseDate = &version.ReleaseDate
 	}
 	return me
 }

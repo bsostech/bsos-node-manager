@@ -2059,9 +2059,15 @@ type Me struct {
 	// PublicApiBase Address nodes use to download installers and reach the platform over HTTP (PUBLIC_API_BASE). null when unset, in which case the frontend falls back to the browser URL
 	PublicApiBase *string `json:"publicApiBase,omitempty"`
 
+	// ReleaseDate Date (YYYY-MM-DD) of the commit the release tag points to; null for builds that are not an exact release
+	ReleaseDate *string `json:"releaseDate,omitempty"`
+
 	// Role Platform role
 	Role Role `json:"role"`
 	User User `json:"user"`
+
+	// Version Platform build version - a release tag, git describe output for a build after a tag, or dev
+	Version string `json:"version"`
 }
 
 // MetricId Time-series metric (basic tier). blocks_behind = blocks behind, the larger of the highest block the node learned from peers minus its own height (same scrape) and the value the platform computes from this organization's chain head (scrape times differ per node, so values below the tolerance count as 0). txpool_added / txpool_removed / txpool_rejected = transactions per second entering the pool, leaving it (included in a block, replaced or dropped) and rejected. jvm_heap = percentage of Besu's Java heap in use (jvm_memory_used_bytes ÷ jvm_memory_max_bytes, area=heap). txpool_usage = percentage of the transaction pool in use (transactions in the pool ÷ the count limit; only the sequenced pool has a limit, so layered pools have no such series). txpool_oldest = seconds the oldest transaction in the pool has waited (0 for an empty pool; includes transactions stuck behind a nonce gap)

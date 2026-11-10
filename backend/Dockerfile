@@ -37,7 +37,12 @@ RUN go mod download
 COPY backend/ .
 COPY --from=frontend /app/dist ./internal/webapp/dist
 # No file uses -tags core, so it is the same as no tag; only -tags enterprise compiles in cmd/server/edition_enterprise.go
-RUN CGO_ENABLED=1 go build -tags "$EDITION" -trimpath -ldflags='-s -w' -o /out/server ./cmd/server
+# Version and release date come from up.sh (deploy/version.sh); a build without them reports dev
+ARG VERSION=dev
+ARG RELEASE_DATE=
+RUN CGO_ENABLED=1 go build -tags "$EDITION" -trimpath \
+    -ldflags="-s -w -X besu-manager/backend/internal/version.Version=${VERSION} -X besu-manager/backend/internal/version.ReleaseDate=${RELEASE_DATE}" \
+    -o /out/server ./cmd/server
 # Ship cactl (CA material: init-offline / import / rotate-intermediate / show) in the image so container deployments can run it
 RUN CGO_ENABLED=1 go build -trimpath -ldflags='-s -w' -o /out/cactl ./cmd/cactl
 

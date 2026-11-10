@@ -35,6 +35,8 @@ services:
       dockerfile: backend/Dockerfile
       args:
         EDITION: ${EDITION:-core}
+        VERSION: ${BUILD_VERSION:-dev}        # written to .env by up.sh (deploy/version.sh); not plain VERSION, which shells often export
+        RELEASE_DATE: ${BUILD_RELEASE_DATE:-}
     image: ${SERVER_IMAGE:-bsos-node-manager}   # the Enterprise edition is bsos-node-manager-enterprise
     container_name: ${SIM_PREFIX:-bsos-node-manager}-server
     restart: unless-stopped

@@ -22,13 +22,15 @@
 #   # Check the options and the host and list what would change, without changing anything
 #   ./up.sh --org-id org-a.example --domain platform-a.example --acme --email ops@org-a.example --dry-run
 #   # Messages are in English; add --zh to any run to print them in Chinese
+#   # Version: taken from git (git describe), or from VERSION in a source download; --version v1.2.3 overrides it
 #   # Production: add --offline-root on the first run; the CA root private key stays out of the DB and is written to root-ca.key for you to keep offline
 #   ./up.sh --org-id org-a.example --domain platform-a.example --cert ./fullchain.pem --key ./privkey.pem --offline-root
 #   # Or import an enterprise PKI (directory containing root.pem, inter.pem, inter.key)
 #   ./up.sh --org-id org-a.example --domain platform-a.example --cert ./fullchain.pem --key ./privkey.pem --ca-import ./ca
 #
 # What it does: [--install-docker installs the latest docker only if missing] (1) generate server.env (CA_MASTER_KEY generated, idempotent, never overwritten)
-#        (2) install certificates per mode (manual mode) + write TLS_MODE etc. into server.env (3) build the agent into agent-bin if it is empty
+#        (2) install certificates per mode (manual mode) + write TLS_MODE etc. into server.env (3) build the agent into agent-bin if it is
+#        empty or built from another version
 #        (4) generate the database password into .env if there is none (never overwritten), then docker compose up -d --build.
 set -euo pipefail
 
@@ -53,7 +55,7 @@ trap 'rc=$?; [ $rc -ne 0 ] && printf "%s[ERR ]%s $ERR_AT: %s\n" "$c_red" "$c_rst
 HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
 
 ORG_ID=""; DOMAIN=""; HOST=""; AGENT_HOST=""; HTTP=false; INSTALL_DOCKER=false; CERT=""; KEY=""
-ACME=false; EMAIL=""; STAGING=false; FORCE_CORE=false; OFFLINE_ROOT=false; CA_IMPORT=""; DRY_RUN=false; ORG_GENERATED=false
+ACME=false; EMAIL=""; STAGING=false; FORCE_CORE=false; OFFLINE_ROOT=false; CA_IMPORT=""; DRY_RUN=false; ORG_GENERATED=false; VERSION_ARG=""
 NEED_DOCKER=false  # dry run on a host without docker: the real run would install it first
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -72,6 +74,7 @@ while [ $# -gt 0 ]; do
     --offline-root) OFFLINE_ROOT=true; shift;;  # first deployment: the CA root private key is written to root-ca.key for you to take away, not stored in the DB
     --ca-import) CA_IMPORT="$2"; shift 2;;      # first deployment: import an enterprise PKI (directory containing root.pem, inter.pem, inter.key; the root private key is not imported)
     --dry-run) DRY_RUN=true; shift;;     # check the options, the ports and DNS, list what would change, change nothing
+    --version) VERSION_ARG="$2"; shift 2;;  # version built into the server and the agent (default: see deploy/version.sh)
     --zh)     shift;;                    # print messages in Chinese (scanned above)
     *) die "$(t "unknown option: $1" "未知參數: $1")" 2;;
   esac
@@ -83,6 +86,16 @@ if $OFFLINE_ROOT && [ -n "$CA_IMPORT" ]; then die "$(t "use only one of --offlin
 command -v openssl >/dev/null || die "$(t "openssl is required (install it with your package manager, e.g. dnf install openssl)" "需要 openssl(用套件管理員安裝,例如 dnf install openssl)")" 2
 EDITION="core"; SERVER_IMAGE="bsos-node-manager"
 if ! $FORCE_CORE && [ -d "$HERE/../../../backend/enterprise" ]; then EDITION="enterprise"; SERVER_IMAGE="bsos-node-manager-enterprise"; fi
+# Version of this checkout, built into both the server image and the agent so the two always match.
+# shellcheck source=../../version.sh
+. "$HERE/../../version.sh"
+resolve_version "$HERE/../../.." "$VERSION_ARG"
+# The agent in agent-bin/ is rebuilt when it is missing or was built from another version. A checkout with local changes keeps
+# the same version string (…-dirty, or dev), so after editing agent code rebuild it with deploy/agent/build-agent.sh.
+AGENT_STALE=false
+for f in agent-bin/besu-agent-linux-amd64 agent-bin/besu-agent-linux-arm64; do
+  [ -f "$f" ] && [ "$(cat "$f.version" 2>/dev/null)" = "$VERSION" ] || AGENT_STALE=true
+done
 # --org-id is needed only when server.env is first created; if it exists (restart/idempotent rerun), ORG_ID from server.env is reused.
 # The org id is written into every certificate when the CA is created and cannot change later. Core has no concept of orgs, so if omitted one is generated and written to server.env;
 # if you plan to upgrade to Enterprise, pass --org-id on the first run (it is the org other organizations see when they read your nodes).
@@ -178,6 +191,7 @@ if $DRY_RUN; then
   step "$(t "Dry run: what a real run would change" "試跑:實際執行會做的變更")"
   ! $NEED_DOCKER || log "$(t "Install the latest docker from get.docker.com" "從 get.docker.com 安裝最新版 docker")"
   log "$(t "Edition ${EDITION}: build the image ${SERVER_IMAGE} from this checkout" "版本 ${EDITION}:從這份原始碼建 ${SERVER_IMAGE} 映像")"
+  log "$(t "Version ${VERSION}${RELEASE_DATE:+ (released $RELEASE_DATE)}, written to .env" "版號 ${VERSION}${RELEASE_DATE:+(發布於 $RELEASE_DATE)},寫入 .env")"
   grep -qE '^POSTGRES_PASSWORD=.' .env 2>/dev/null || log "$(t "Generate a random database password into .env (chmod 600)" "產生隨機的資料庫密碼寫進 .env(chmod 600)")"
   if [ ! -f server.env ]; then
     org_shown="$ORG_ID"; ! $ORG_GENERATED || org_shown="bsos-node-manager-<random>"
@@ -189,8 +203,8 @@ if $DRY_RUN; then
   fi
   [ "$MODE" != https ] || log "$(t "Copy $CERT and $KEY to certs/server.crt and certs/server.key (owner uid 10001, needs sudo)" "把 $CERT 與 $KEY 複製成 certs/server.crt、certs/server.key(擁有者 uid 10001,需要 sudo)")"
   { [ -f server.env ] && grep -qE '^TZ=' server.env; } || log "$(t "Add the host time zone to server.env as TZ" "把主機時區寫進 server.env 的 TZ")"
-  if ls agent-bin/besu-agent-linux-* >/dev/null 2>&1; then log "$(t "Reuse the agent in agent-bin/" "沿用 agent-bin/ 裡的 agent")"
-  else log "$(t "Build the agent (x86_64 and aarch64) into agent-bin/" "建 agent(x86_64 與 aarch64)到 agent-bin/")"; fi
+  if $AGENT_STALE; then log "$(t "Build the agent ${VERSION} (x86_64 and aarch64) into agent-bin/" "建 agent ${VERSION}(x86_64 與 aarch64)到 agent-bin/")"
+  else log "$(t "Reuse the agent ${VERSION} in agent-bin/" "沿用 agent-bin/ 裡的 agent ${VERSION}")"; fi
   $OFFLINE_ROOT && log "$(t "Create the CA with the root private key written to root-ca.key (only if the database has no CA yet)" "建立 CA,root 私鑰寫到 root-ca.key(只在 DB 還沒有 CA 時)")"
   [ -z "$CA_IMPORT" ] || log "$(t "Import the CA from $CA_IMPORT (only if the database has no CA yet)" "從 $CA_IMPORT 匯入 CA(只在 DB 還沒有 CA 時)")"
   log "$(t "docker compose up -d --build: start or replace the containers, publishing ports $PORTS" "docker compose up -d --build:啟動或替換容器，對外開 $PORTS")"
@@ -273,27 +287,27 @@ if ! grep -qE '^TZ=' server.env; then
 fi
 
 step "$(t "Check agent-bin" "agent-bin 檢查")"
-# Node installs download the agent from here, so a first deployment builds it (x86_64 and aarch64).
-# An existing build is left alone, so reruns stay fast.
-if ! ls agent-bin/besu-agent-linux-* >/dev/null 2>&1; then
-  log "$(t "agent-bin/ is empty; building the agent (x86_64 and aarch64)" "agent-bin/ 是空的,建 agent(x86_64 與 aarch64)")"
+# Node installs download the agent from here, so it is built (x86_64 and aarch64) when missing or from another version;
+# a build that already matches is left alone, so reruns stay fast.
+if $AGENT_STALE; then
+  log "$(t "Building the agent ${VERSION} (x86_64 and aarch64) into agent-bin/" "建 agent ${VERSION}(x86_64 與 aarch64)到 agent-bin/")"
   ZH_ARG=""; [ "$ZH" = 1 ] && ZH_ARG="--zh"
-  "$HERE/../../agent/build-agent.sh" $ZH_ARG
+  "$HERE/../../agent/build-agent.sh" --version "$VERSION" $ZH_ARG
 fi
 log "OK: $(ls agent-bin/besu-agent-linux-* | tr '\n' ' ')"
 
 step "docker compose up"
-# Write the edition (determined at the top) into .env, which compose reads automatically: a later manual docker compose up --build uses the same edition instead of silently reverting to Core.
+# Write the edition and version (determined at the top) into .env, which compose reads automatically: a later manual docker compose up --build uses the same edition instead of silently reverting to Core.
 # .env also holds the database password, generated once and never rewritten: postgres applies it only when its data volume is first
 # created, so a new value would no longer match the existing database. Hex keeps it safe inside DATABASE_URL.
 touch .env
-(umask 077; grep -vE '^(EDITION|SERVER_IMAGE)=' .env > .env.tmp) || true
+(umask 077; grep -vE '^(EDITION|SERVER_IMAGE|BUILD_VERSION|BUILD_RELEASE_DATE)=' .env > .env.tmp) || true
 if ! grep -qE '^POSTGRES_PASSWORD=.' .env.tmp; then
   printf 'POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" >> .env.tmp
   log "$(t "Database password generated and written to .env" "資料庫密碼已產生並寫入 .env")"
 fi
-printf 'EDITION=%s\nSERVER_IMAGE=%s\n' "$EDITION" "$SERVER_IMAGE" >> .env.tmp && chmod 600 .env.tmp && mv .env.tmp .env
-log "$(t "Edition: ${EDITION} (image ${SERVER_IMAGE}, written to .env)" "版本:${EDITION}(映像 ${SERVER_IMAGE},已寫入 .env)")"
+printf 'EDITION=%s\nSERVER_IMAGE=%s\nBUILD_VERSION=%s\nBUILD_RELEASE_DATE=%s\n' "$EDITION" "$SERVER_IMAGE" "$VERSION" "$RELEASE_DATE" >> .env.tmp && chmod 600 .env.tmp && mv .env.tmp .env
+log "$(t "Edition: ${EDITION} (image ${SERVER_IMAGE}), version ${VERSION}, written to .env" "版本:${EDITION}(映像 ${SERVER_IMAGE}),版號 ${VERSION},已寫入 .env")"
 # On first start server self-signs a CA and stores the root private key in the DB; for an offline root or an imported enterprise PKI, the CA must be created before that.
 if $OFFLINE_ROOT || [ -n "$CA_IMPORT" ]; then
   $DOCKER compose build server

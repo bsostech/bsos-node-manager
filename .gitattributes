@@ -1,0 +1,2 @@
+# GitHub source archives (and git archive) fill VERSION with the tag and date; see deploy/version.sh
+VERSION export-subst

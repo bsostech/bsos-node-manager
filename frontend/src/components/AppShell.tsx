@@ -208,13 +208,15 @@ function CollapseButton({ collapsed, onClick, className = '' }: { collapsed: boo
 const COLLAPSED_KEY = 'bsos-sidebar-collapsed';
 const readCollapsed = () => { try { return localStorage.getItem(COLLAPSED_KEY) === '1'; } catch { return false; } };
 
-/** About: the open-source software's version card - version, license, release date, source code. Data lives in src/about.ts. */
+/** About: the open-source software's version card - version, release date, license, source code. Version and date come from /me; the rest from src/about.ts. */
 function AboutModal({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
+  const { me } = useAuth();
   const link = 'text-accent hover:underline underline-offset-2';
   const rows: [string, ReactNode][] = [
-    [t('about.version'), `v${ABOUT.version}`],
-    [t('about.released'), ABOUT.releasedAt],
+    [t('about.version'), me?.version ?? '—'],
+    // Only a release build has a date; a build from an untagged commit shows just its version
+    ...(me?.releaseDate ? [[t('about.released'), me.releaseDate] as [string, ReactNode]] : []),
     [t('about.license'), <a href={ABOUT.licenseUrl} target="_blank" rel="noreferrer" className={link}>{ABOUT.license}</a>],
     [t('about.source'), <a href={ABOUT.sourceUrl} target="_blank" rel="noreferrer" className={`${link} break-all`}>{ABOUT.sourceUrl.replace(/^https?:\/\//, '')}</a>],
   ];
@@ -237,7 +239,7 @@ function AboutModal({ onClose }: { onClose: () => void }) {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
-  const { can } = useAuth();
+  const { can, me } = useAuth();
   // Sidebar collapse: icons only, remembered in localStorage (per browser)
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const toggleCollapsed = () => setCollapsed((c) => { try { localStorage.setItem(COLLAPSED_KEY, c ? '0' : '1'); } catch { /* private mode: ignore */ } return !c; });
@@ -281,7 +283,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           // flex: keeps the small-text button from being pushed down by the normal line-height baseline; extra bottom space so text doesn't touch the window edge
           <div className="flex items-center border-t border-hair px-3 pb-2 pt-1.5">
             <button type="button" onClick={() => setAbout(true)} className="rounded px-1.5 py-px text-[0.5625rem] text-ink-3 transition-colors hover:bg-elevated hover:text-ink">
-              {t('app.name')} v{ABOUT.version}
+              {t('app.name')} {me?.version}
             </button>
           </div>
         )}

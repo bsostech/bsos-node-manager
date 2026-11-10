@@ -42,7 +42,7 @@ while [ $# -gt 0 ]; do
         *) die "$(t "unknown arch: $2 (amd64|arm64|both)" "未知 arch: $2(amd64|arm64|both)")" 2;;
       esac; shift 2;;
     --out) OUT="$2"; shift 2;;
-    --version) VERSION="$2"; shift 2;;       # override the injected version string (default: git describe)
+    --version) VERSION="$2"; shift 2;;       # override the injected version string (default: see deploy/version.sh)
     --zh) shift;;
     *) die "$(t "unknown option: $1" "未知參數: $1")" 2;;
   esac
@@ -59,11 +59,10 @@ fi
 mkdir -p "$OUT"
 
 # The version string is computed outside the script (on the host) and passed in: the Docker build context mounts only agent/, there is no .git in the container,
-# so git describe cannot run there. Without --version it is computed from the repo with git describe, falling back to dev.
-if [ -z "$VERSION" ]; then
-  VERSION="$(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || true)"
-  [ -n "$VERSION" ] || VERSION="dev"
-fi
+# so git describe cannot run there. Without --version it is resolved the same way as up.sh does (deploy/version.sh).
+# shellcheck source=../version.sh
+. "$ROOT/deploy/version.sh"
+resolve_version "$ROOT" "$VERSION"
 log "$(t "Version: $VERSION" "注入版本: $VERSION")"
 
 # ldflags override agent/internal/version.Version (module path per agent/go.mod: besu-manager/agent).

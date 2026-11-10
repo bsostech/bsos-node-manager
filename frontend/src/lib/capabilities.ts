@@ -56,10 +56,18 @@ export function requiredTone(c: NodeCapabilities | null | undefined): 'error' | 
   return null;
 }
 
-/** Compare a.b.c versions (numeric parts only; unrecognized parts count as 0). If the agent is older than what the platform ships, suggest an upgrade */
+/** Whether the agent should be upgraded to what the platform ships. Two release versions (v1.2.3, or a pre-release such as
+ *  v1.3.0-rc.1, as in deploy/version.sh) compare by number, a pre-release counting as older than its release, so a newer agent is
+ *  not flagged; anything else (git describe output such as v1.2.3-4-gabc1234, a bare commit hash, dev) only says whether it is
+ *  the same build, matching upgrade-agent.sh, which swaps the binary whenever the two version strings differ. */
 export const olderThan = (v: string, latest: string) => {
-  const p = (x: string) => x.replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
-  const [a, b] = [p(v), p(latest)];
-  for (let i = 0; i < Math.max(a.length, b.length); i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) < (b[i] ?? 0);
-  return false;
+  if (v === latest) return false;
+  const release = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.]+))?$/;
+  const [a, b] = [release.exec(v), release.exec(latest)];
+  // -<n>-g<sha> (a commit after a tag) and -dirty (local changes) are not pre-releases: compare those as builds
+  const build = /(^|-)(\d+-g[0-9a-f]+|dirty)$/;
+  if (!a || !b || build.test(a[4] ?? '') || build.test(b[4] ?? '')) return true;
+  for (let i = 1; i <= 3; i++) if (+a[i] !== +b[i]) return +a[i] < +b[i];
+  if (!a[4] !== !b[4]) return !!a[4]; // same numbers: the pre-release is the older one
+  return true; // two different pre-releases of the same version
 };

@@ -1265,6 +1265,16 @@ export interface components {
              * @example https://platform.org-a
              */
             publicApiBase?: string | null;
+            /**
+             * @description Platform build version - a release tag, git describe output for a build after a tag, or dev
+             * @example v1.0.0
+             */
+            version: string;
+            /**
+             * @description Date (YYYY-MM-DD) of the commit the release tag points to; null for builds that are not an exact release
+             * @example 2026-11-10
+             */
+            releaseDate?: string | null;
         };
         /** @description Public login page settings (available without logging in); the login page uses them to decide whether to show the password form / SSO button */
         AuthConfig: {

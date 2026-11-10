@@ -11,6 +11,7 @@ import (
 	"besu-manager/backend/internal/api"
 	"besu-manager/backend/internal/auth"
 	"besu-manager/backend/internal/store"
+	"besu-manager/backend/internal/version"
 )
 
 // oidcSSO is a redirect-based SSO: it never takes passwords and has a login URL.
@@ -135,5 +136,22 @@ func TestGetMeThroughSession(t *testing.T) {
 	}
 	if e, ok := r.(api.GetMe401JSONResponse); !ok || e.Code != api.ErrorCodeUnauthorized || !hasReason(api.Error(e), api.ErrorReasonNotLoggedIn) {
 		t.Fatalf("沒登入應 401 not_logged_in: %#v", r)
+	}
+}
+
+// /me carries the build version for the About dialog; a release date only for an exact release.
+func TestMeCarriesBuildVersion(t *testing.T) {
+	defer func(v, d string) { version.Version, version.ReleaseDate = v, d }(version.Version, version.ReleaseDate)
+	s := New(Deps{})
+
+	version.Version, version.ReleaseDate = "v1.0.0-3-gabc1234", ""
+	if me := s.meWithFlags(context.Background(), nil, api.Me{}); me.Version != "v1.0.0-3-gabc1234" || me.ReleaseDate != nil {
+		t.Fatalf("untagged build: want version and no date, got %q %v", me.Version, me.ReleaseDate)
+	}
+
+	version.Version, version.ReleaseDate = "v1.0.0", "2026-11-10"
+	me := s.meWithFlags(context.Background(), nil, api.Me{})
+	if me.Version != "v1.0.0" || me.ReleaseDate == nil || *me.ReleaseDate != "2026-11-10" {
+		t.Fatalf("release build: want v1.0.0 2026-11-10, got %q %v", me.Version, me.ReleaseDate)
 	}
 }

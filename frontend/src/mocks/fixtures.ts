@@ -638,7 +638,7 @@ export const persistSession = () => {
 };
 export function meForUser(username: string): Me {
   const u = mockUsers[username];
-  return { user: { id: username, name: u.name }, role: u.role, org: 'org-a', mustChangePassword: u.mustChange ?? false };
+  return { user: { id: username, name: u.name }, role: u.role, org: 'org-a', mustChangePassword: u.mustChange ?? false, version: 'v1.0.0', releaseDate: '2026-11-10' };
 }
 
 /** Join tokens. Every node has a used one (nodeName is the name entered at join, allowedSources is that node's IP);

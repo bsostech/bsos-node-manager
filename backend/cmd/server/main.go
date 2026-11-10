@@ -29,6 +29,7 @@ import (
 	"besu-manager/backend/internal/rpcops"
 	"besu-manager/backend/internal/server"
 	"besu-manager/backend/internal/store"
+	"besu-manager/backend/internal/version"
 	"besu-manager/backend/internal/webapp"
 )
 
@@ -70,6 +71,7 @@ type wiring struct {
 
 func main() {
 	_ = godotenv.Load()
+	log.Printf("bsos-node-manager server %s (%s edition)", version.Version, edition)
 	// SIGTERM (docker stop, systemctl stop) and Ctrl-C: stop accepting connections, let requests in flight finish,
 	// then exit 0 instead of being killed mid-request.
 	stop, cancelStop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
