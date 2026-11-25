@@ -117,7 +117,7 @@ export function ChainStatus({ chain }: { chain?: ChainInfo }) {
     ? { level: 'none', title: t('overview.consUnknown'), sub: known ? t('overview.consUnknownHint') : '' }
     : halted
       ? { level: 'err', title: t('overview.consTitle', { on: 0, n }), sub: t('overview.consSubBelow', { q: quorum }) }
-      : { level: consLevel, title: t('overview.consTitle', { on, n }), sub: spare <= 0 ? t('overview.consSubZero') : t('overview.consSubSpare', { spare }) };
+      : { level: consLevel, title: t('overview.consTitle', { on, n }), sub: spare < 0 ? t('overview.consSubBelow', { q: quorum }) : spare === 0 ? t('overview.consSubZero') : t('overview.consSubSpare', { spare }) };
 
   // Needs attention: at most one item per dimension; if both hold, show both
   const describe = (v: { address: string; orgId?: string | null; nodeId?: string | null; name?: string | null }) => {

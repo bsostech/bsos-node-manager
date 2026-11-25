@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Overview: when more validators are not producing than the fault tolerance allows but the chain has not yet been marked as stopped, the consensus participation cell now says it is below the quorum; it said "one more offline stops the chain" before.
+
 ## [1.0.0] - 2026-11-10
 
 First public release of the open-source edition.
