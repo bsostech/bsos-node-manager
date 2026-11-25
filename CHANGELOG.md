@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Host network rate: the agent no longer reports an absurd rate (around 3.7 EB/s) when a network interface disappears or its counter resets, and it leaves out loopback and container virtual interfaces, which counted the same traffic several times.
+
 ## [1.0.0] - 2026-11-10
 
 First public release of the open-source edition.

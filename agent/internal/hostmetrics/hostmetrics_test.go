@@ -52,3 +52,15 @@ func TestServeHTTP(t *testing.T) {
 		t.Fatalf("JSON 回應不對: %s (%v)", rec.Body.String(), err)
 	}
 }
+
+func TestCountedNIC(t *testing.T) {
+	for name, want := range map[string]bool{
+		"eth0": true, "ens5": true, "bond0": true,
+		"lo": false, "docker0": false, "veth1a2b3c": false, "br-0123abcd": false, "virbr0": false,
+		"cni0": false, "flannel.1": false, "cali12345": false,
+	} {
+		if got := countedNIC(name); got != want {
+			t.Errorf("countedNIC(%q) = %v,要 %v", name, got, want)
+		}
+	}
+}

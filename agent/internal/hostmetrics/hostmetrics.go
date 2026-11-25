@@ -74,22 +74,44 @@ func (s *Sampler) sample() {
 		v := float32(du.UsedPercent)
 		hw.DiskUsedPercent = &v
 	}
-	if io, err := gnet.IOCounters(false); err == nil && len(io) > 0 {
+	if io, err := gnet.IOCounters(true); err == nil && len(io) > 0 {
+		var recv, sent uint64
+		for _, n := range io {
+			if countedNIC(n.Name) {
+				recv, sent = recv+n.BytesRecv, sent+n.BytesSent
+			}
+		}
 		now := time.Now()
 		if s.prev != nil {
-			if dt := now.Sub(s.prev.at).Seconds(); dt > 0 {
-				rx := int64(float64(io[0].BytesRecv-s.prev.rx) / dt)
-				tx := int64(float64(io[0].BytesSent-s.prev.tx) / dt)
+			// a counter that went backwards (an interface removed or reset) would wrap the unsigned subtraction
+			if dt := now.Sub(s.prev.at).Seconds(); dt > 0 && recv >= s.prev.rx && sent >= s.prev.tx {
+				rx := int64(float64(recv-s.prev.rx) / dt)
+				tx := int64(float64(sent-s.prev.tx) / dt)
 				hw.NetRxBytesPerSec, hw.NetTxBytesPerSec = &rx, &tx
 			}
 		}
-		s.prev = &netSample{rx: io[0].BytesRecv, tx: io[0].BytesSent, at: now}
+		s.prev = &netSample{rx: recv, tx: sent, at: now}
 	} else if err != nil {
 		log.Printf("hostmetrics: net: %v", err)
 	}
 	s.mu.Lock()
 	s.last = hw
 	s.mu.Unlock()
+}
+
+// countedNIC reports whether an interface counts toward the host's network rate. Loopback (the agent's
+// forwarding to Besu, log shipping) and the virtual interfaces of container runtimes and hypervisors carry
+// traffic that is local or already counted on a physical interface.
+func countedNIC(name string) bool {
+	if name == "lo" {
+		return false
+	}
+	for _, p := range []string{"veth", "docker", "br-", "virbr", "cni", "flannel", "cali"} {
+		if strings.HasPrefix(name, p) {
+			return false
+		}
+	}
+	return true
 }
 
 // ServeHTTP handles GET /host-metrics. If Accept contains application/json it returns HardwareMetrics,
