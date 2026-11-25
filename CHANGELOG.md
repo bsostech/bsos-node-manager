@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Cross-node trends: a node's pending transactions now turn orange at twice the other nodes' median (at least 20 more), as the help text says; it took three times the median before.
+
 ## [1.0.0] - 2026-11-10
 
 First public release of the open-source edition.

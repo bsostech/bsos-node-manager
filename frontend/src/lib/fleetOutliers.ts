@@ -40,7 +40,7 @@ export function detectOutliers(metric: TrendMetric, latest: Map<string, number |
       metric === 'disk' ? v - med >= 25 :
       metric === 'mem' || metric === 'cpu' ? Math.abs(v - med) >= 25 :
       metric === 'peer_count' ? (v === 0 && med > 0) || med - v >= Math.max(2, med * 0.3) : // only "fewer than the others" is a problem: 30% or more fewer (at least 2 peers) counts, 0 always counts. A ratio rather than a fixed count so it works for both a 4-node and a 30-node chain
-      v - med >= Math.max(20, med * 2) || (med >= 20 && v <= med / 2);     // txpool: a backlog counts (double or more and at least 20 more); also counts if the others are receiving (median ≥ 20) and it has less than half (not getting tx gossip)
+      v - med >= Math.max(20, med) || (med >= 20 && v <= med / 2);     // txpool: a backlog counts (double or more and at least 20 more); also counts if the others are receiving (median ≥ 20) and it has less than half (not getting tx gossip)
     if (alarm || apart) out.add(id);
   }
   return out;
